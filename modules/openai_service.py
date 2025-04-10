@@ -3,6 +3,7 @@ import os
 from openai import OpenAI
 from modules import category_service
 from config import OPENAI_API_KEY
+from config import SHEET_ID
 # Hardcoded OpenAI API key (not recommended for production)
 
 def detect_intent(user_input):
@@ -287,7 +288,6 @@ def extract_expense_details(user_input):
             client = category_service.sheets_service.get_sheets_client()
             
             # Open the spreadsheet
-            SHEET_ID = "10c4U63Od8Im3E2HP5NKReio6wafWbfJ_zsGJRKHB1LY"
             spreadsheet = client.open_by_key(SHEET_ID)
             
             # Get the categories sheet

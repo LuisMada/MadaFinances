@@ -72,8 +72,7 @@ def get_budgets():
         # Get the client
         client = sheets_service.get_sheets_client()
         
-        # Open the spreadsheet
-        SHEET_ID = "10c4U63Od8Im3E2HP5NKReio6wafWbfJ_zsGJRKHB1LY"
+
         spreadsheet = client.open_by_key(SHEET_ID)
         
         # Get the budgets sheet
