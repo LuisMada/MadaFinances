@@ -3,7 +3,6 @@ from openai import OpenAI
 from modules import category_service, sheets_service
 import datetime
 from config import OPENAI_API_KEY
-from config import SHEET_ID
 
 def extract_expense_details_with_date(user_input):
     """
@@ -26,6 +25,7 @@ def extract_expense_details_with_date(user_input):
             client = category_service.sheets_service.get_sheets_client()
             
             # Open the spreadsheet
+            SHEET_ID = "10c4U63Od8Im3E2HP5NKReio6wafWbfJ_zsGJRKHB1LY"
             spreadsheet = client.open_by_key(SHEET_ID)
             
             # Get the categories sheet

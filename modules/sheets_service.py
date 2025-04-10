@@ -37,48 +37,6 @@ def get_sheets_client():
         traceback.print_exc()
         raise Exception(f"Failed to authenticate with Google Sheets: {str(e)}")
 
-def get_worksheet(sheet_name):
-    """
-    Get a specific worksheet by name.
-    
-    Args:
-        sheet_name (str): Name of the worksheet to retrieve
-        
-    Returns:
-        gspread.Worksheet: The requested worksheet
-    """
-    client = get_sheets_client()
-    spreadsheet = client.open_by_key(SHEET_ID)
-    return spreadsheet.worksheet(sheet_name)
-
-def get_all_rows(sheet_name):
-    """
-    Get all rows from a specific worksheet.
-    
-    Args:
-        sheet_name (str): Name of the worksheet to retrieve data from
-        
-    Returns:
-        list: List of all rows in the worksheet
-    """
-    worksheet = get_worksheet(sheet_name)
-    return worksheet.get_all_values()
-
-def append_row(sheet_name, row_data):
-    """
-    Append a row to a specific worksheet.
-    
-    Args:
-        sheet_name (str): Name of the worksheet to append to
-        row_data (list): List of values to append as a row
-        
-    Returns:
-        bool: True if successful
-    """
-    worksheet = get_worksheet(sheet_name)
-    worksheet.append_row(row_data)
-    return True
-
 def log_expense(expense_data):
     """
     Log an expense to Google Sheets.
@@ -95,6 +53,18 @@ def log_expense(expense_data):
         print("Attempting to log expense to Google Sheets...")
         print(f"Expense data: {expense_data}")
         
+        # Get the client
+        client = get_sheets_client()
+        
+        # Open the spreadsheet by ID
+        
+        print(f"Opening spreadsheet with ID: {SHEET_ID}")
+        spreadsheet = client.open_by_key(SHEET_ID)
+        
+        # Select the "Expenses" worksheet
+        print("Accessing 'Expenses' worksheet...")
+        worksheet = spreadsheet.worksheet("Expenses")
+        
         # Prepare the row to append
         row = [
             expense_data["Date"],
@@ -104,9 +74,9 @@ def log_expense(expense_data):
             expense_data["Source"]
         ]
         
-        # Use the new append_row helper function
         print(f"Appending row: {row}")
-        append_row("Expenses", row)
+        # Append the row
+        worksheet.append_row(row)
         
         print("Successfully logged expense to Google Sheets")
         return True
@@ -118,4 +88,24 @@ def log_expense(expense_data):
     except Exception as e:
         print(f"Error logging expense to Google Sheets: {str(e)}")
         traceback.print_exc()
+        raise Exception(f"Error logging expense to Google Sheets: {str(e)}")
+        
+        # Select the "Expenses" worksheet
+        worksheet = spreadsheet.worksheet("Expenses")
+        
+        # Prepare the row to append
+        row = [
+            expense_data["Date"],
+            expense_data["Description"],
+            expense_data["Amount"],
+            expense_data["Category"],
+            expense_data["Source"]
+        ]
+        
+        # Append the row
+        worksheet.append_row(row)
+        
+        return True
+        
+    except Exception as e:
         raise Exception(f"Error logging expense to Google Sheets: {str(e)}")

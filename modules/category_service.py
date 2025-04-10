@@ -3,11 +3,35 @@ Category management service for the financial tracker.
 This module handles creating, reading, updating, and deleting expense categories.
 """
 import os
-from modules import sheets_service, cache_utils
+import time
+from modules import sheets_service
 from config import SHEET_ID
-
 # Sheet name for categories
 CATEGORIES_SHEET = "Categories"
+
+# Cache for categories to reduce API calls
+_categories_cache = {
+    "categories": None,
+    "last_updated": 0,
+    "cache_ttl": 60  # Cache time-to-live in seconds
+}
+
+def _get_cache():
+    """Get the categories cache."""
+    return _categories_cache
+
+def _update_cache(categories):
+    """Update the categories cache."""
+    _categories_cache["categories"] = categories
+    _categories_cache["last_updated"] = time.time()
+
+def _is_cache_valid():
+    """Check if the cache is valid."""
+    if _categories_cache["categories"] is None:
+        return False
+    
+    cache_age = time.time() - _categories_cache["last_updated"]
+    return cache_age < _categories_cache["cache_ttl"]
 
 def ensure_categories_sheet():
     """
@@ -15,16 +39,16 @@ def ensure_categories_sheet():
     Creates it with default categories if it doesn't exist.
     """
     try:
-        # Try to get from cache first
-        categories = cache_utils.get_cached("categories")
-        if categories:
+        # If we've already initialized, use cache
+        if _is_cache_valid():
             print("Using cached categories")
             return True
             
         # Get the client
         client = sheets_service.get_sheets_client()
         
-        # Open the spreadsheet by ID
+        # Open the spreadsheet by ID from sheets_service
+
         spreadsheet = client.open_by_key(SHEET_ID)
         
         # Check if Categories sheet exists
@@ -66,7 +90,7 @@ def ensure_categories_sheet():
         # Get the categories to cache them
         categories_sheet = spreadsheet.worksheet(CATEGORIES_SHEET)
         categories = categories_sheet.col_values(1)[1:]
-        cache_utils.set_cached("categories", categories)
+        _update_cache(categories)
         
         return True
         
@@ -76,7 +100,7 @@ def ensure_categories_sheet():
         default_categories = ["Food", "Transport", "Transportation", "Entertainment", 
                              "Shopping", "Utilities", "Housing", "Health", 
                              "Education", "Other"]
-        cache_utils.set_cached("categories", default_categories)
+        _update_cache(default_categories)
         return False
 
 def get_categories():
@@ -87,23 +111,40 @@ def get_categories():
         list: List of category names
     """
     try:
-        # Define fetch function for cache
-        def fetch_categories():
-            # Ensure the sheet exists first
-            ensure_categories_sheet()
-            
-            # If that doesn't populate cache, fetch directly
-            client = sheets_service.get_sheets_client()
-            spreadsheet = client.open_by_key(SHEET_ID)
-            categories_sheet = spreadsheet.worksheet(CATEGORIES_SHEET)
-            categories = categories_sheet.col_values(1)[1:]
+        # Check if cache is valid before making API call
+        if _is_cache_valid():
+            categories = _categories_cache["categories"]
+            print(f"Using cached categories: {categories}")
             return categories
             
-        # Try to get from cache, or fetch if needed
-        categories = cache_utils.get_cached("categories", ttl=60, fetch_func=fetch_categories)
+        # Ensure the sheet exists
+        ensure_categories_sheet()
+        
+        # If cache was updated by ensure_categories_sheet, use it
+        if _is_cache_valid():
+            categories = _categories_cache["categories"]
+            print(f"Using freshly cached categories: {categories}")
+            return categories
+            
+        # If we get here, cache is still invalid, try direct fetch
+        # Get the client
+        client = sheets_service.get_sheets_client()
+        
+        # Open the spreadsheet 
+        SHEET_ID = "10c4U63Od8Im3E2HP5NKReio6wafWbfJ_zsGJRKHB1LY"
+        spreadsheet = client.open_by_key(SHEET_ID)
+        
+        # Get the categories sheet
+        categories_sheet = spreadsheet.worksheet(CATEGORIES_SHEET)
+        
+        # Get all values from column A (excluding header)
+        categories = categories_sheet.col_values(1)[1:]
+        
+        # Update cache
+        _update_cache(categories)
         
         # Debug output
-        print(f"Retrieved categories: {categories}")
+        print(f"Retrieved categories from API: {categories}")
         
         return categories
         
@@ -116,7 +157,7 @@ def get_categories():
         print("Using default categories as fallback")
         
         # Update cache with defaults to prevent repeated API calls
-        cache_utils.set_cached("categories", default_categories)
+        _update_cache(default_categories)
         
         return default_categories
 
@@ -143,6 +184,7 @@ def add_category(name, description=""):
         client = sheets_service.get_sheets_client()
         
         # Open the spreadsheet
+        SHEET_ID = "10c4U63Od8Im3E2HP5NKReio6wafWbfJ_zsGJRKHB1LY"
         spreadsheet = client.open_by_key(SHEET_ID)
         
         # Get the categories sheet
@@ -153,7 +195,7 @@ def add_category(name, description=""):
         
         # Update the cache with the new category
         current_categories.append(name)
-        cache_utils.set_cached("categories", current_categories)
+        _update_cache(current_categories)
         
         return True
         
@@ -188,6 +230,7 @@ def rename_category(old_name, new_name):
         client = sheets_service.get_sheets_client()
         
         # Open the spreadsheet
+        SHEET_ID = "10c4U63Od8Im3E2HP5NKReio6wafWbfJ_zsGJRKHB1LY"
         spreadsheet = client.open_by_key(SHEET_ID)
         
         # Get the categories sheet
@@ -205,7 +248,7 @@ def rename_category(old_name, new_name):
             
             # Update the cache
             updated_categories = [new_name if cat == old_name else cat for cat in current_categories]
-            cache_utils.set_cached("categories", updated_categories)
+            _update_cache(updated_categories)
             
             return True
         else:
@@ -241,6 +284,7 @@ def delete_category(name):
         client = sheets_service.get_sheets_client()
         
         # Open the spreadsheet
+        SHEET_ID = "10c4U63Od8Im3E2HP5NKReio6wafWbfJ_zsGJRKHB1LY"
         spreadsheet = client.open_by_key(SHEET_ID)
         
         # Get the categories sheet
@@ -258,7 +302,7 @@ def delete_category(name):
             
             # Update the cache
             updated_categories = [cat for cat in current_categories if cat != name]
-            cache_utils.set_cached("categories", updated_categories)
+            _update_cache(updated_categories)
             
             return True
         else:
@@ -284,6 +328,7 @@ def update_existing_expenses(old_category, new_category):
         client = sheets_service.get_sheets_client()
         
         # Open the spreadsheet
+        SHEET_ID = "10c4U63Od8Im3E2HP5NKReio6wafWbfJ_zsGJRKHB1LY"
         spreadsheet = client.open_by_key(SHEET_ID)
         
         # Get the expenses sheet
