@@ -7,3 +7,4 @@ numpy==1.26.4
 python-dateutil==2.8.2
 altair==5.5.0
 python-dotenv==0.21.0
+python-telegram-bot==20.6
