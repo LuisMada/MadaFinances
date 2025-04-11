@@ -27,18 +27,15 @@ def get_expense_keyboard():
 def get_summary_keyboard():
     """
     Get an inline keyboard for expense summary follow-up actions.
+    Focused more on weekly summaries.
     
     Returns:
         InlineKeyboardMarkup: Keyboard with summary-related actions
     """
     keyboard = [
         [
-            InlineKeyboardButton("📅 This Week", callback_data="summary_week"),
+            InlineKeyboardButton("📅 Weekly Summary", callback_data="summary_week"),
             InlineKeyboardButton("📅 This Month", callback_data="summary_month")
-        ],
-        [
-            InlineKeyboardButton("📅 Last Month", callback_data="summary_last_month"),
-            InlineKeyboardButton("📆 This Year", callback_data="summary_year")
         ],
         [
             InlineKeyboardButton("💰 Check Budget", callback_data="check_budget"),
@@ -51,18 +48,19 @@ def get_summary_keyboard():
 def get_budget_keyboard():
     """
     Get an inline keyboard for budget follow-up actions.
+    Focused on weekly budget features.
     
     Returns:
         InlineKeyboardMarkup: Keyboard with budget-related actions
     """
     keyboard = [
         [
-            InlineKeyboardButton("📊 View Summary", callback_data="summary_month"),
-            InlineKeyboardButton("➕ Set Budget", callback_data="set_budget")
+            InlineKeyboardButton("📊 Weekly Summary", callback_data="summary_week"),
+            InlineKeyboardButton("➕ Set Weekly Budget", callback_data="set_weekly_budget")
         ],
         [
-            InlineKeyboardButton("💰 Weekly Budget", callback_data="set_weekly_budget"),
-            InlineKeyboardButton("📅 Today's Expenses", callback_data="today_expenses")
+            InlineKeyboardButton("📅 Today's Expenses", callback_data="today_expenses"),
+            InlineKeyboardButton("💰 Set Budget", callback_data="set_budget")
         ]
     ]
     
@@ -78,7 +76,7 @@ def get_help_keyboard():
     keyboard = [
         [
             InlineKeyboardButton("📅 Today's Expenses", callback_data="today_expenses"),
-            InlineKeyboardButton("📊 View Summary", callback_data="summary_week")
+            InlineKeyboardButton("📊 Weekly Summary", callback_data="summary_week")
         ],
         [
             InlineKeyboardButton("💰 Budget Status", callback_data="check_budget"),
@@ -169,3 +167,70 @@ def get_template_text(template_type):
     }
     
     return templates.get(template_type, "Spent ₱ on ")
+
+def get_category_spending_keyboard():
+    """
+    Get an inline keyboard for category spending follow-up actions.
+    
+    Returns:
+        InlineKeyboardMarkup: Keyboard with category-related actions
+    """
+    keyboard = [
+        [
+            InlineKeyboardButton("📊 /sum", callback_data="summary_week"),
+            InlineKeyboardButton("💰 Check Budget", callback_data="check_budget")
+        ],
+        [
+            InlineKeyboardButton("📋 List Categories", callback_data="list_categories"),
+            InlineKeyboardButton("📅 Today's Expenses", callback_data="today_expenses")
+        ]
+    ]
+    
+    return InlineKeyboardMarkup(keyboard)
+
+def get_category_search_keyboard():
+    """
+    Get an inline keyboard for category search options.
+    
+    Returns:
+        InlineKeyboardMarkup: Keyboard with category timeframe options
+    """
+    keyboard = [
+        [
+            InlineKeyboardButton("📅 Today", callback_data="cat_search_today"),
+            InlineKeyboardButton("📊 This Week", callback_data="cat_search_week")
+        ],
+        [
+            InlineKeyboardButton("⬅️ Back", callback_data="check_budget"),
+        ]
+    ]
+    
+    return InlineKeyboardMarkup(keyboard)
+
+def get_week_start_day_keyboard():
+    """
+    Get an inline keyboard for selecting the week start day.
+    
+    Returns:
+        InlineKeyboardMarkup: Keyboard with day options
+    """
+    keyboard = [
+        [
+            InlineKeyboardButton("Monday", callback_data="weekstart_0"),
+            InlineKeyboardButton("Tuesday", callback_data="weekstart_1")
+        ],
+        [
+            InlineKeyboardButton("Wednesday", callback_data="weekstart_2"),
+            InlineKeyboardButton("Thursday", callback_data="weekstart_3")
+        ],
+        [
+            InlineKeyboardButton("Friday", callback_data="weekstart_4"),
+            InlineKeyboardButton("Saturday", callback_data="weekstart_5")
+        ],
+        [
+            InlineKeyboardButton("Sunday", callback_data="weekstart_6"),
+            InlineKeyboardButton("❌ Cancel", callback_data="weekstart_cancel")
+        ]
+    ]
+    
+    return InlineKeyboardMarkup(keyboard)

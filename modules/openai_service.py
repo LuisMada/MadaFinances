@@ -435,3 +435,79 @@ def extract_expense_details(user_input):
         # Print the error for debugging
         print(f"OpenAI API Error: {str(e)}")
         raise Exception(f"Error extracting expense details: {str(e)}")
+    
+def detect_category_spending_query(user_input):
+    """
+    Detect if the user is asking about spending on a specific category.
+    
+    Args:
+        user_input (str): The user's query
+        
+    Returns:
+        tuple: (is_category_query, category, period)
+            - is_category_query (bool): True if this is a category spending query
+            - category (str): Extracted category name or empty string
+            - period (str): Extracted time period or "this week"
+    """
+    try:
+        # Create a client instance
+        client = OpenAI(api_key=OPENAI_API_KEY)
+        
+        # Use chat completions API
+        completion = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {
+                    "role": "system", 
+                    "content": "You are a financial assistant that analyzes whether a message is asking about spending on a specific category."
+                },
+                {
+                    "role": "user", 
+                    "content": f"""Analyze this message: '{user_input}'
+                    
+                    Is the user asking about how much they spent on a specific category?
+                    If yes, identify the category and time period.
+                    
+                    Return a JSON with these fields:
+                    - is_category_query: true or false
+                    - category: the category name (if applicable)
+                    - period: the time period (today, this week, this month, etc.) or "this week" if not specified
+                    
+                    Examples:
+                    Input: "How much did I spend on food this week?"
+                    Output: {{"is_category_query": true, "category": "Food", "period": "this week"}}
+                    
+                    Input: "What are my transportation expenses for today?"
+                    Output: {{"is_category_query": true, "category": "Transportation", "period": "today"}}
+                    
+                    Input: "Show my expenses for last month"
+                    Output: {{"is_category_query": false, "category": "", "period": "last month"}}
+                    
+                    Input: "I spent 100 on coffee"
+                    Output: {{"is_category_query": false, "category": "", "period": "this week"}}
+                    """
+                }
+            ],
+            temperature=0.1
+        )
+        
+        # Get the response content
+        content = completion.choices[0].message.content
+        
+        # Clean the content if needed
+        if "```json" in content:
+            content = content.split("```json")[1].split("```")[0].strip()
+        elif "```" in content:
+            content = content.split("```")[1].strip()
+            
+        query_data = json.loads(content)
+        
+        return (
+            query_data.get("is_category_query", False),
+            query_data.get("category", ""),
+            query_data.get("period", "this week")
+        )
+        
+    except Exception as e:
+        print(f"Error detecting category spending query: {str(e)}")
+        return (False, "", "this week")

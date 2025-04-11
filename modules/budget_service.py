@@ -501,3 +501,230 @@ def format_budget_set_confirmation(amount, period, category="Total"):
     )
     
     return message
+
+def get_category_spending(start_date, end_date, category):
+    """
+    Get spending information for a specific category within a date range.
+    
+    Args:
+        start_date (datetime.date): Start date for the query
+        end_date (datetime.date): End date for the query
+        category (str): The expense category to analyze
+        
+    Returns:
+        dict: Dictionary containing category spending information
+    """
+    from modules import expense_summary_service
+    
+    try:
+        # Get expenses for the period
+        expense_df = expense_summary_service.get_expenses_in_period(start_date, end_date)
+        
+        # Filter for the requested category
+        category_df = expense_df[expense_df['Category'] == category]
+        
+        # Calculate days in period
+        days_in_period = (end_date - start_date).days + 1
+        
+        # Initialize results
+        category_spending = {
+            "category": category,
+            "total_spent": 0,
+            "transaction_count": 0,
+            "period_start": start_date,
+            "period_end": end_date,
+            "period_days": days_in_period,
+            "has_data": False,
+            "transactions": [],
+            "percentage_of_total": 0,
+            "daily_average": 0
+        }
+        
+        # Get overall spending for the period
+        total_spending = expense_df['Amount'].sum() if not expense_df.empty else 0
+        
+        if not category_df.empty:
+            category_spending["has_data"] = True
+            category_spending["total_spent"] = category_df['Amount'].sum()
+            category_spending["transaction_count"] = len(category_df)
+            category_spending["daily_average"] = category_spending["total_spent"] / days_in_period
+            
+            # Calculate percentage of total spending
+            if total_spending > 0:
+                category_spending["percentage_of_total"] = (category_spending["total_spent"] / total_spending) * 100
+            
+            # Get individual transactions (limit to last 10 for performance)
+            transactions = []
+            for _, row in category_df.sort_values('Date', ascending=False).head(10).iterrows():
+                transactions.append({
+                    "date": row['Date'].strftime("%Y-%m-%d") if hasattr(row['Date'], 'strftime') else row['Date'],
+                    "description": row['Description'],
+                    "amount": float(row['Amount'])
+                })
+            category_spending["transactions"] = transactions
+        
+        return category_spending
+        
+    except Exception as e:
+        print(f"Error getting category spending: {str(e)}")
+        return {
+            "category": category,
+            "error": str(e),
+            "has_data": False
+        }
+
+def format_weekly_budget_status_response(budget_status):
+    """
+    Format the budget status with a weekly focus into a well-structured response.
+    Uses Philippine Peso (₱) as the currency.
+    
+    Args:
+        budget_status (dict): Dictionary containing budget information
+        
+    Returns:
+        str: Formatted response string
+    """
+    if not budget_status.get("has_budget", False):
+        return "📊 **Weekly Budget Status**\n\nNo budgets found. Set a budget first with a command like 'Set ₱1000 weekly budget'."
+    
+    # Create a well-formatted summary focused on weekly view
+    response = "📊 **Weekly Budget Status**\n\n"
+    
+    # Format the status emoji
+    status_emoji = "✅"  # under_budget
+    if budget_status.get("status") == "over_budget":
+        status_emoji = "❌"
+    elif budget_status.get("status") == "near_limit":
+        status_emoji = "⚠️"
+    
+    # Weekly budget info with emphasis on the weekly view
+    weekly_budget = budget_status.get('weekly_budget', 0)
+    response += f"{status_emoji} **Weekly Budget:** ₱{weekly_budget:.2f}\n"
+    response += f"💰 **Spent so far:** ₱{budget_status['total_spent']:.2f} ({budget_status['percent_used']:.1f}%)\n"
+    response += f"🔢 **Remaining:** ₱{budget_status['remaining']:.2f}\n"
+    
+    # Week progress
+    days_elapsed = budget_status.get("days_elapsed", 0)
+    days_in_week = 7
+    response += f"⏳ **Week Progress:** {days_elapsed} of {days_in_week} days " + \
+               f"({(days_elapsed/days_in_week)*100:.1f}%)\n\n"
+    
+    # Daily budget info - add today's spending if available
+    daily_budget = budget_status.get('daily_budget', 0)
+    today_spent = budget_status.get('today_spent', 0)
+    
+    if 'today_spent' in budget_status:
+        # Add today's spending info
+        response += f"📅 **Today's Spending:** ₱{today_spent:.2f}\n"
+        
+        # Calculate remaining for today
+        remaining_today = daily_budget - today_spent
+        remaining_color = "surplus" if remaining_today >= 0 else "over budget"
+        response += f"📅 **Today's Budget:** ₱{daily_budget:.2f} " + \
+                   f"(₱{abs(remaining_today):.2f} {remaining_color})\n\n"
+    
+    # Daily allowance for remaining days
+    response += "📅 **Daily Breakdown:**\n"
+    response += f"• Budget per day: ₱{budget_status['daily_budget']:.2f}\n"
+    response += f"• Average spent per day: ₱{budget_status['daily_average']:.2f}\n"
+    
+    days_remaining = budget_status.get("days_remaining", 0)
+    if days_remaining > 0:
+        response += f"• Remaining daily allowance: ₱{budget_status.get('remaining_daily_allowance', 0):.2f}\n\n"
+    else:
+        response += "\n"
+    
+    # Category breakdown if available
+    if budget_status.get("categories"):
+        response += "📊 **Top Categories This Week:**\n"
+        
+        # Sort categories by amount spent
+        sorted_categories = sorted(
+            budget_status["categories"].items(),
+            key=lambda x: x[1]["spent"],
+            reverse=True
+        )
+        
+        # Show only top 3 categories to keep it clean
+        for i, (category, data) in enumerate(sorted_categories[:3], 1):
+            cat_emoji = "✅"  # under_budget
+            if data["status"] == "over_budget":
+                cat_emoji = "❌"
+            elif data["status"] == "near_limit":
+                cat_emoji = "⚠️"
+                
+            response += f"{cat_emoji} **{category}:** ₱{data['spent']:.2f}"
+            
+            # Add budget info if available
+            if data.get('budget', 0) > 0:
+                response += f" of ₱{data['budget']:.2f} ({data['percent_used']:.1f}%)"
+            
+            response += "\n"
+    
+    return response
+
+def format_category_spending_response(spending_data):
+    """
+    Format category spending data into a well-structured response.
+    
+    Args:
+        spending_data (dict): Dictionary containing category spending information
+        
+    Returns:
+        str: Formatted response string
+    """
+    category = spending_data["category"]
+    
+    if not spending_data.get("has_data", False):
+        return f"📊 **{category} Spending**\n\nNo expenses recorded for {category} in this period."
+    
+    # Format dates for display
+    start_date = spending_data["period_start"]
+    end_date = spending_data["period_end"]
+    
+    if isinstance(start_date, str):
+        period_text = f"{start_date} to {end_date}"
+    else:
+        # Try to make a friendly period name
+        if start_date == end_date:
+            period_text = start_date.strftime("%B %d, %Y")  # Single day
+        elif start_date.month == end_date.month and start_date.year == end_date.year:
+            if end_date.day - start_date.day == 6:
+                period_text = f"Week of {start_date.strftime('%B %d')}"
+            else:
+                period_text = f"{start_date.strftime('%B %d')} - {end_date.strftime('%d, %Y')}"
+        else:
+            period_text = f"{start_date.strftime('%b %d')} - {end_date.strftime('%b %d, %Y')}"
+    
+    # Create response
+    response = f"📊 **{category} Spending for {period_text}**\n\n"
+    
+    # Add main stats
+    total_spent = spending_data["total_spent"]
+    transaction_count = spending_data["transaction_count"]
+    percentage = spending_data["percentage_of_total"]
+    daily_avg = spending_data["daily_average"]
+    
+    response += f"**Total Spent:** ₱{total_spent:.2f}\n"
+    response += f"**Transactions:** {transaction_count}\n"
+    response += f"**Daily Average:** ₱{daily_avg:.2f}\n"
+    response += f"**Percentage of Total:** {percentage:.1f}%\n\n"
+    
+    # Add recent transactions if available
+    transactions = spending_data.get("transactions", [])
+    if transactions:
+        response += "**Recent Transactions:**\n"
+        
+        # Limit to 5 transactions to keep the response clean
+        for i, tx in enumerate(transactions[:5]):
+            date = tx["date"]
+            if isinstance(date, str) and len(date) == 10:  # YYYY-MM-DD format
+                try:
+                    date_obj = datetime.datetime.strptime(date, "%Y-%m-%d")
+                    date = date_obj.strftime("%b %d")  # Convert to shorter format
+                except:
+                    pass  # Keep original if conversion fails
+                    
+            response += f"• {date}: ₱{tx['amount']:.2f} - {tx['description']}\n"
+    
+    return response
