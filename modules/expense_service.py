@@ -274,14 +274,15 @@ def handle_multiple_expenses(user_input):
                     try:
                         # Parse the date and format it nicely
                         date_obj = datetime.datetime.strptime(expense_data["date"], "%Y-%m-%d")
-                        formatted_date = date_obj.strftime("%b %d, %Y")  # e.g., "Apr 08, 2025"
+                        formatted_date = date_obj.strftime("%b %d, %Y")  # e.g., "Apr 11, 2025"
                     except:
                         formatted_date = expense_data["date"]
                     
-                    # Prepare confirmation message with date
+                    # Enhanced confirmation message with more details
                     confirmation = (
-                        f"✅ Logged: ₱{expense_data['amount']} for {expense_data['description']} "
-                        f"(Category: {expense_data['category']}, Date: {formatted_date})"
+                        f"✅ Got it! I've recorded ₱{expense_data['amount']:.2f} for "
+                        f"{expense_data['description']} in the {expense_data['category']} "
+                        f"category on {formatted_date}."
                     )
                     results.append(confirmation)
                 else:
@@ -289,6 +290,18 @@ def handle_multiple_expenses(user_input):
             
             except Exception as e:
                 results.append(f"❌ Error processing '{entry}': {str(e)}")
+        
+        # The rest of the function remains the same
+        if len(results) == 1:
+            return results[0]
+        else:
+            response = "I've processed your expenses:\n\n"
+            for idx, result in enumerate(results, 1):
+                response += f"{idx}. {result}\n"
+            return response
+    
+    except Exception as e:
+        return f"An error occurred while processing multiple expenses: {str(e)}"
         
         # Combine results into a single response
         if len(results) == 1:

@@ -472,3 +472,32 @@ def format_budget_status_response(budget_status):
             response += f"{cat_emoji} **{category}:** ₱{data['spent']:.2f} of ₱{data['budget']:.2f} ({data['percent_used']:.1f}%)\n"
     
     return response
+
+def format_budget_set_confirmation(amount, period, category="Total"):
+    """
+    Format a confirmation message for setting a budget.
+    
+    Args:
+        amount (float): Budget amount
+        period (str): "Weekly" or "Monthly"
+        category (str, optional): Category name or "Total" for overall budget
+        
+    Returns:
+        str: Formatted confirmation message
+    """
+    # Format period for display
+    period_display = period.lower()
+    
+    # Format category part of message
+    if category == "Total":
+        category_display = "overall spending"
+    else:
+        category_display = f"the {category} category"
+    
+    # Create confirmation message
+    message = (
+        f"✅ Got it! I've set a {period_display} budget of ₱{amount:.2f} for "
+        f"{category_display}. I'll track your spending against this budget."
+    )
+    
+    return message
