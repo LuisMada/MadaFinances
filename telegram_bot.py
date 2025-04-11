@@ -4,12 +4,13 @@ import logging
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
 from dotenv import load_dotenv
+import datetime
 
 # Import your existing services
 from modules import expense_service, expense_summary_service, budget_service
-from modules import category_service, openai_service
+from modules import category_service, openai_service, telegram_ui
 
 if not logging.getLogger().handlers:
     logging.basicConfig(
@@ -55,7 +56,9 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• Set budgets with \"set 5000 monthly budget\"\n\n"
         "Type /help for more information."
     )
-    await update.message.reply_text(welcome_message)
+    # Add inline keyboard for quick actions
+    keyboard = telegram_ui.get_help_keyboard()
+    await update.message.reply_text(welcome_message, reply_markup=keyboard)
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Send a help message when the command /help is issued."""
@@ -71,7 +74,9 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• /e - Quick expense entry template\n\n"
         "View your dashboard at: [your-render-app-url]"
     )
-    await update.message.reply_text(help_text, parse_mode='Markdown')
+    # Add inline keyboard for quick actions
+    keyboard = telegram_ui.get_help_keyboard()
+    await update.message.reply_text(help_text, parse_mode='Markdown', reply_markup=keyboard)
 
 async def categories_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """List all available expense categories."""
@@ -94,7 +99,8 @@ async def summary_shortcut_command(update: Update, context: ContextTypes.DEFAULT
     try:
         # Use existing summary service with default period
         _, response, _ = expense_summary_service.handle_expense_summary("Show my expenses this week")
-        await update.message.reply_text(response, parse_mode='Markdown')
+        formatted_text, keyboard = telegram_ui.format_summary_response(response)
+        await update.message.reply_text(formatted_text, parse_mode='Markdown', reply_markup=keyboard)
     except Exception as e:
         logger.error(f"Error generating summary via shortcut: {str(e)}")
         await update.message.reply_text(f"Error generating summary: {str(e)}")
@@ -108,7 +114,8 @@ async def budget_shortcut_command(update: Update, context: ContextTypes.DEFAULT_
         period_data = expense_summary_service.parse_time_period("This Month")
         budget_status = budget_service.get_budget_status(period_data["start_date"], period_data["end_date"])
         response = budget_service.format_budget_status_response(budget_status)
-        await update.message.reply_text(response, parse_mode='Markdown')
+        formatted_text, keyboard = telegram_ui.format_budget_response(response)
+        await update.message.reply_text(formatted_text, parse_mode='Markdown', reply_markup=keyboard)
     except Exception as e:
         logger.error(f"Error checking budget status via shortcut: {str(e)}")
         await update.message.reply_text(f"Error checking budget status: {str(e)}")
@@ -121,9 +128,107 @@ async def expense_template_command(update: Update, context: ContextTypes.DEFAULT
         "• spent 500 on lunch\n"
         "• 1200 for electricity bill yesterday\n"
         "• 50 coffee\n\n"
-        "I'll categorize and record it automatically!"
+        "Or choose a template below:"
     )
-    await update.message.reply_text(template_message, parse_mode='Markdown')
+    # Add keyboard with expense templates
+    keyboard = telegram_ui.get_expense_template_keyboard()
+    await update.message.reply_text(template_message, parse_mode='Markdown', reply_markup=keyboard)
+
+# Callback query handler for inline keyboards
+# Add this function to your telegram_bot.py file, replacing the existing button_callback function
+
+async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle button press from inline keyboards."""
+    query = update.callback_query
+    user_id = update.effective_user.id
+    
+    # Always answer the callback query to stop the loading animation
+    await query.answer()
+    
+    logger.info(f"Button pressed by {user_id}: {query.data}")
+    
+    try:
+        # Handle different button callbacks
+        if query.data.startswith("summary_"):
+            # Summary requests
+            period = query.data.replace("summary_", "")
+            period_text = "this " + period
+            if period == "last_month":
+                period_text = "last month"
+                
+            _, response, _ = expense_summary_service.handle_expense_summary(f"Show my expenses {period_text}")
+            formatted_text, keyboard = telegram_ui.format_summary_response(response)
+            await query.message.reply_text(formatted_text, parse_mode='Markdown', reply_markup=keyboard)
+            
+        elif query.data == "today_expenses":
+            # Get today's expenses
+            today = datetime.date.today()
+            df = expense_summary_service.get_expenses_in_period(today, today)
+            
+            if df.empty:
+                response = "📅 **Today's Expenses**\n\nNo expenses recorded for today."
+            else:
+                # Format expenses in a readable way
+                total = df['Amount'].sum()
+                expense_list = []
+                
+                for _, row in df.iterrows():
+                    amount = float(row['Amount'])
+                    description = row['Description']
+                    category = row['Category']
+                    expense_list.append(f"• ₱{amount:.2f} - {description} ({category})")
+                
+                expenses_text = "\n".join(expense_list)
+                response = f"📅 **Today's Expenses**\n\n{expenses_text}\n\n**Total:** ₱{total:.2f}"
+            
+            # Use summary keyboard for follow-up options
+            _, keyboard = telegram_ui.format_summary_response(response)
+            await query.message.reply_text(response, parse_mode='Markdown', reply_markup=keyboard)
+            
+        elif query.data == "check_budget":
+            # Budget status check
+            period_data = expense_summary_service.parse_time_period("This Month")
+            budget_status = budget_service.get_budget_status(period_data["start_date"], period_data["end_date"])
+            response = budget_service.format_budget_status_response(budget_status)
+            formatted_text, keyboard = telegram_ui.format_budget_response(response)
+            await query.message.reply_text(formatted_text, parse_mode='Markdown', reply_markup=keyboard)
+            
+        elif query.data.startswith("set_") and "budget" in query.data:
+            # Budget setting template
+            period = "monthly"
+            if "weekly" in query.data:
+                period = "weekly"
+                
+            template_message = f"To set a {period} budget, reply with an amount like:\n\n" + \
+                               f"\"Set ₱5000 {period} budget\"\n\n" + \
+                               f"Or for a specific category:\n\n" + \
+                               f"\"Set ₱1000 {period} budget for Food\""
+                               
+            await query.message.reply_text(template_message)
+            
+        elif query.data == "add_expense":
+            # Expense template
+            await expense_template_command(update, context)
+            
+        elif query.data == "list_categories":
+            # List categories
+            categories = category_service.get_categories()
+            if not categories:
+                await query.message.reply_text("No categories found.")
+                return
+                
+            categories_list = "\n".join([f"• {category}" for category in categories])
+            await query.message.reply_text(f"📋 **Available categories:**\n{categories_list}", parse_mode='Markdown')
+            
+        elif query.data.startswith("template_"):
+            # Send expense template
+            template_type = query.data.replace("template_", "")
+            template_text = telegram_ui.get_template_text(template_type)
+            await query.message.reply_text(f"_Complete this expense:_\n\n`{template_text}`", parse_mode='Markdown')
+            
+    except Exception as e:
+        logger.error(f"Error handling button callback: {str(e)}")
+        await query.message.reply_text(f"Error processing your request: {str(e)}")
 
 # Message handler
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -143,7 +248,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if is_summary_request:
             # Handle expense summary request
             _, response, _ = expense_summary_service.handle_expense_summary(user_input)
-            await update.message.reply_text(response, parse_mode='Markdown')
+            formatted_text, keyboard = telegram_ui.format_summary_response(response)
+            await update.message.reply_text(formatted_text, parse_mode='Markdown', reply_markup=keyboard)
         elif is_budget_request:
             # Handle budget-related request
             try:
@@ -171,14 +277,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     budget_status = budget_service.get_budget_status(period_data["start_date"], period_data["end_date"])
                     response = budget_service.format_budget_status_response(budget_status)
                 
-                await update.message.reply_text(response, parse_mode='Markdown')
+                formatted_text, keyboard = telegram_ui.format_budget_response(response)
+                await update.message.reply_text(formatted_text, parse_mode='Markdown', reply_markup=keyboard)
             except Exception as e:
                 logger.error(f"Error processing budget request: {str(e)}")
                 await update.message.reply_text(f"Error processing budget request: {str(e)}")
         else:
             # Assume it's an expense entry
             response = expense_service.handle_multiple_expenses(user_input)
-            await update.message.reply_text(response, parse_mode='Markdown')
+            formatted_text, keyboard = telegram_ui.format_expense_response(response)
+            await update.message.reply_text(formatted_text, parse_mode='Markdown', reply_markup=keyboard)
             
     except Exception as e:
         logger.error(f"Error processing message: {str(e)}")
@@ -203,6 +311,9 @@ def main():
     application.add_handler(CommandHandler("sum", summary_shortcut_command))
     application.add_handler(CommandHandler("b", budget_shortcut_command))
     application.add_handler(CommandHandler("e", expense_template_command))
+    
+    # Add callback query handler for inline keyboards
+    application.add_handler(CallbackQueryHandler(button_callback))
     
     # Add message handler
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))

@@ -28,13 +28,13 @@ def parse_time_period(query):
         # Current date for reference
         today = datetime.datetime.now().strftime("%Y-%m-%d")
         
-        # Extract time period
+        # Extract time period - ENHANCED PROMPT
         completion = client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[
                 {
                     "role": "system", 
-                    "content": "You are a financial assistant that extracts date ranges from queries."
+                    "content": "You are a financial assistant that extracts date ranges from queries with precision."
                 },
                 {
                     "role": "user", 
@@ -48,10 +48,23 @@ def parse_time_period(query):
                     - end_date: the end date in YYYY-MM-DD format
                     - period_name: a human-readable name for this period (e.g., "This Week", "March 2025")
                     
+                    Handle these time period formats:
+                    - Standard periods: "this week", "this month", "last month", "today", "yesterday"
+                    - Specific months: "January", "February", "March 2025"
+                    - Relative periods: "last 7 days", "past 30 days", "previous quarter"
+                    - Seasons: "this summer", "last winter"
+                    - Years: "2024", "this year", "last year"
+                    - Quarters: "Q1", "first quarter", "last quarter"
+                    - Date ranges: "from January to March", "between April 1 and April 10"
+                    - Single days: "on Monday", "April 5th"
+                    
                     Examples:
                     - For "Show me expenses this week", return dates from the start of the current week to today
                     - For "Expenses in March", return dates from March 1 to March 31 of the current year
                     - For "Last month's spending", return the entire previous month
+                    - For "Expenses from March 1 to April 10", return that exact date range
+                    - For "Last quarter expenses", return the previous 3-month quarter
+                    - For "Spending during Holy Week", determine the date range for Holy Week in the current year
                     - If no specific time period is mentioned, default to the current month
                     
                     Be precise with the dates based on the query.
@@ -155,6 +168,7 @@ def get_expenses_in_period(start_date, end_date):
         print(f"Error getting expenses from Google Sheets: {str(e)}")
         raise Exception(f"Failed to retrieve expenses: {str(e)}")
 
+# The rest of the file remains unchanged
 def generate_summary(df):
     """
     Generate summary statistics from expense data.
