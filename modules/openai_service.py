@@ -3,6 +3,7 @@ import os
 from openai import OpenAI
 from modules import category_service
 from config import OPENAI_API_KEY
+import datetime
 # Hardcoded OpenAI API key (not recommended for production)
 
 def detect_intent(user_input):
@@ -233,7 +234,7 @@ def detect_summary_request(user_input):
             messages=[
                 {
                     "role": "system", 
-                    "content": "You are a financial assistant that determines if a message is asking for an expense summary."
+                    "content": "You are a financial assistant that determines if a message is explicitly asking for an expense summary."
                 },
                 {
                     "role": "user", 
@@ -251,6 +252,8 @@ def detect_summary_request(user_input):
                     - "I spent $50 on dinner"
                     - "Add a new category"
                     - "Delete the Travel category"
+                    - "Dining out 223 mcdo"
+                    - "223 mcdonalds"
                     """
                 }
             ],
@@ -266,90 +269,57 @@ def detect_summary_request(user_input):
         print(f"Error detecting summary request: {str(e)}")
         return False
 
-def extract_expense_details(user_input):
+def extract_expense_details_with_date(user_input):
     """
-    Extract expense details from natural language input using OpenAI.
+    Extract expense details from natural language input using OpenAI, including date.
+    Improved with better category mapping and handling of dining establishments.
     
     Args:
         user_input (str): Natural language description of an expense
         
     Returns:
-        dict: Dictionary containing amount, category, and description
+        dict: Dictionary containing amount, category, description, and date
     """
     try:
-        # Force a fresh fetch of categories by invalidating the cache
+        # Force a fresh fetch of categories
         category_service._categories_cache["last_updated"] = 0
         
-        # Get categories with descriptions
-        categories_with_descriptions = {}
-        try:
-            # Get the client
-            client = category_service.sheets_service.get_sheets_client()
-            
-            # Open the spreadsheet
-            SHEET_ID = "10c4U63Od8Im3E2HP5NKReio6wafWbfJ_zsGJRKHB1LY"
-            spreadsheet = client.open_by_key(SHEET_ID)
-            
-            # Get the categories sheet
-            categories_sheet = spreadsheet.worksheet("Categories")
-            
-            # Get all rows
-            all_rows = categories_sheet.get_all_values()
-            
-            # Skip header row and process category data
-            for row in all_rows[1:]:
-                if len(row) >= 1 and row[0].strip():
-                    category_name = row[0].strip()
-                    description = row[1].strip() if len(row) > 1 else ""
-                    categories_with_descriptions[category_name] = description
-        except Exception as e:
-            print(f"Error fetching category descriptions: {str(e)}")
-            # Fall back to just getting category names
-            categories = category_service.get_categories()
-            for category in categories:
-                categories_with_descriptions[category] = ""
-        
-        # Format categories with descriptions for the prompt
-        categories_context = ""
-        for category, description in categories_with_descriptions.items():
-            if description:
-                categories_context += f"- {category}: {description}\n"
-            else:
-                categories_context += f"- {category}\n"
-        
-        # Get just the category names
-        categories = list(categories_with_descriptions.keys())
+        # Get available categories with descriptions
+        available_categories = category_service.get_categories()
+        categories_list = ", ".join(available_categories)
         
         # Create a client instance
         client = OpenAI(api_key=OPENAI_API_KEY)
         
-        # First, determine the purpose of the expense
+        # Extract expense details with improved prompt
         completion = client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[
                 {
                     "role": "system", 
-                    "content": "You are a financial assistant that categorizes expenses accurately."
+                    "content": f"You are a financial assistant that extracts expense details and maps them accurately to available categories: {categories_list}"
                 },
                 {
                     "role": "user", 
                     "content": f"""Given this expense description: '{user_input}'
                     
-                    1. Extract the numeric amount (if any)
-                    2. Determine what this expense is for (transportation, food, etc.)
-                    3. Create a brief description
+                    1. Extract the numeric amount (if any), ignoring currency symbols
+                    2. Create a brief description for what this expense is for
+                    3. Classify it into one of these available categories ONLY: {categories_list}
+                    4. Extract or infer the date (use today's date if not specified)
+                    
+                    Today's date is {datetime.datetime.now().strftime("%Y-%m-%d")}.
+                    
+                    Important mapping rules:
+                    - Fast food (McDonalds, Jollibee, KFC, etc.) should be categorized as "Dining out"
+                    - Coffee shops should be categorized as "Beverages" or "Dining out" if available
+                    - If a category isn't available, map to the closest matching category
                     
                     Return ONLY a JSON with these fields:
                     - amount: the numeric value (without currency symbols)
-                    - purpose: what general category this expense belongs to
                     - description: a brief description of the expense
-                    
-                    For example:
-                    Input: "spent 50 on lunch"
-                    Output: {{"amount": 50, "purpose": "food", "description": "lunch"}}
-                    
-                    Input: "100 for uber"
-                    Output: {{"amount": 100, "purpose": "transportation", "description": "uber ride"}}
+                    - category: MUST be one of the available categories listed above
+                    - date: the date in YYYY-MM-DD format
                     """
                 }
             ],
@@ -366,79 +336,42 @@ def extract_expense_details(user_input):
             content = content.split("```")[1].strip()
             
         # Parse JSON
-        purpose_data = json.loads(content)
+        expense_data = json.loads(content)
         
-        print(f"First-stage parsing result: {purpose_data}")
-        
-        # Now map the purpose to the available categories with better context
-        completion = client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {
-                    "role": "system", 
-                    "content": "You are a financial assistant that categorizes expenses accurately."
-                },
-                {
-                    "role": "user", 
-                    "content": f"""
-                    Original expense: "{user_input}"
-                    
-                    I've extracted this information:
-                    - Amount: {purpose_data.get('amount', 'unknown')}
-                    - Purpose: {purpose_data.get('purpose', 'unknown')}
-                    - Description: {purpose_data.get('description', 'unknown')}
-                    
-                    I need to assign this expense to one of our existing expense categories.
-                    Here are all the available categories with their descriptions:
-                    
-                    {categories_context}
-                    
-                    Based on the expense information, select the MOST APPROPRIATE category from the list above.
-                    Return ONLY the exact name of one category from the list - nothing else.
-                    """
-                }
-            ],
-            temperature=0
-        )
-        
-        # Get the category
-        category = completion.choices[0].message.content.strip()
-        
-        # Clean the category (remove quotes and other formatting)
-        if category.startswith('"') and category.endswith('"'):
-            category = category[1:-1]
+        # Verify the category is in our available list
+        if expense_data.get("category") not in available_categories:
+            # Find closest match or use "Miscellaneous"
+            # This is a fallback in case the model still returns an invalid category
+            closest_match = "Miscellaneous"
+            for cat in available_categories:
+                if cat.lower() == "dining out" and "food" in expense_data.get("category", "").lower():
+                    closest_match = cat
+                    break
+                if cat.lower() == "miscellaneous":
+                    closest_match = cat
             
-        # Ensure the category is in our list, otherwise default to "Other"
-        if category not in categories:
-            print(f"Category '{category}' not found in available categories. Using 'Other'.")
-            category = "Other"
+            print(f"Invalid category '{expense_data.get('category')}', using '{closest_match}' instead")
+            expense_data["category"] = closest_match
         
-        # Create the final expense data
-        expense_data = {
-            "amount": float(purpose_data.get("amount", 0)),
-            "category": category,
-            "description": purpose_data.get("description", "")
-        }
-        
-        print(f"Final expense data: {expense_data}")
-        
-        # Validate required fields
-        if expense_data["amount"] <= 0:
+        # Validate amount
+        if expense_data.get("amount", 0) <= 0:
             raise ValueError("Could not extract a valid amount from the expense")
             
-        if not expense_data["description"]:
+        # Ensure description exists
+        if not expense_data.get("description"):
             expense_data["description"] = user_input
         
         return expense_data
         
     except Exception as e:
         # Print the error for debugging
-        print(f"OpenAI API Error: {str(e)}")
+        print(f"Error extracting expense details: {str(e)}")
         raise Exception(f"Error extracting expense details: {str(e)}")
     
 def detect_category_spending_query(user_input):
     """
     Detect if the user is asking about spending on a specific category.
+    More strict detection to avoid false positives.
     
     Args:
         user_input (str): The user's query
@@ -453,42 +386,47 @@ def detect_category_spending_query(user_input):
         # Create a client instance
         client = OpenAI(api_key=OPENAI_API_KEY)
         
-        # Use chat completions API
+        # Get available categories for context
+        available_categories = category_service.get_categories()
+        categories_list = ", ".join(available_categories)
+        
+        # Use chat completions API with improved prompt
         completion = client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[
                 {
                     "role": "system", 
-                    "content": "You are a financial assistant that analyzes whether a message is asking about spending on a specific category."
+                    "content": "You are a financial assistant that analyzes whether a message is specifically asking about spending history on a category, not logging a new expense."
                 },
                 {
                     "role": "user", 
                     "content": f"""Analyze this message: '{user_input}'
                     
-                    Is the user asking about how much they spent on a specific category?
-                    If yes, identify the category and time period.
+                    Is the user EXPLICITLY asking about how much they spent on a specific category?
+                    This should only be true if they are asking for a report or summary of past spending.
+                    If they appear to be logging a new expense, this should be false.
+                    
+                    Available categories are: {categories_list}
                     
                     Return a JSON with these fields:
                     - is_category_query: true or false
                     - category: the category name (if applicable)
                     - period: the time period (today, this week, this month, etc.) or "this week" if not specified
                     
-                    Examples:
-                    Input: "How much did I spend on food this week?"
-                    Output: {{"is_category_query": true, "category": "Food", "period": "this week"}}
+                    Examples of category queries (should return true):
+                    - "How much did I spend on Food this week?"
+                    - "Show my Transportation expenses for today"
+                    - "What's my Dining out total for this month?"
                     
-                    Input: "What are my transportation expenses for today?"
-                    Output: {{"is_category_query": true, "category": "Transportation", "period": "today"}}
-                    
-                    Input: "Show my expenses for last month"
-                    Output: {{"is_category_query": false, "category": "", "period": "last month"}}
-                    
-                    Input: "I spent 100 on coffee"
-                    Output: {{"is_category_query": false, "category": "", "period": "this week"}}
+                    Examples of expense logging (should return false):
+                    - "Dining out 223 mcdo"
+                    - "50 coffee"
+                    - "Transportation 20 taxi"
+                    - "223 mcdonalds"
                     """
                 }
             ],
-            temperature=0.1
+            temperature=0
         )
         
         # Get the response content

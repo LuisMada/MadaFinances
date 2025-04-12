@@ -232,24 +232,81 @@ def extract_expense_details_with_date(user_input):
 def handle_multiple_expenses(user_input):
     """
     Handle multiple expenses entered in a single message with improved parsing.
+    More robust handling to avoid false categorization.
     
     Args:
-        user_input (str): User message containing multiple expenses
+        user_input (str): User message containing expense(s)
         
     Returns:
         str: Response message with results of processing all expenses
     """
     try:
+        # Simple check for category spending query patterns to avoid processing as expense
+        if any(phrase in user_input.lower() for phrase in ["how much", "spent on", "spending on", "expenses for"]):
+            if any(word in user_input.lower() for word in ["this week", "this month", "today", "yesterday"]):
+                # This looks like a spending query, not an expense entry
+                return "I'm not sure if you're trying to log an expense or check your spending. For expense entry, try formats like '50 coffee' or '223 mcdonalds'."
+        
+        # Handle single expense entry directly if it follows a common pattern
+        words = user_input.split()
+        simple_expense = False
+        
+        # Check if it follows the "Category Amount Description" or "Amount Description" pattern
+        if len(words) >= 2:
+            # Check second word is numeric (Category Amount pattern)
+            if any(c.isdigit() for c in words[1]):
+                simple_expense = True
+            # Check first word is numeric (Amount Description pattern)
+            elif any(c.isdigit() for c in words[0]):
+                simple_expense = True
+        
+        if simple_expense:
+            try:
+                # Process as single expense
+                expense_data = extract_expense_details_with_date(user_input)
+                
+                if expense_data:
+                    # Format the extracted data as a dictionary for sheets
+                    expense_record = {
+                        "Date": expense_data["date"],
+                        "Description": expense_data["description"],
+                        "Amount": expense_data["amount"],
+                        "Category": expense_data["category"],
+                        "Source": "OpenAI"
+                    }
+                    
+                    # Log the expense to Google Sheets
+                    sheets_service.log_expense(expense_record)
+                    
+                    # Format the date for display
+                    try:
+                        date_obj = datetime.datetime.strptime(expense_data["date"], "%Y-%m-%d")
+                        formatted_date = date_obj.strftime("%b %d, %Y")
+                    except:
+                        formatted_date = expense_data["date"]
+                    
+                    # Enhanced confirmation message
+                    confirmation = (
+                        f"✅ Got it! I've recorded ₱{expense_data['amount']:.2f} for "
+                        f"{expense_data['description']} in the {expense_data['category']} "
+                        f"category on {formatted_date}."
+                    )
+                    return confirmation
+            except Exception as e:
+                print(f"Error processing simple expense: {str(e)}")
+                # Fall through to use the multiple expense handler
+        
+        # Use the existing multiple expense process as fallback
         # Use OpenAI to split the input into separate expense statements
         client = OpenAI(api_key=OPENAI_API_KEY)
         
-        # First, determine if this is a multi-expense input and split it - ENHANCED PROMPT
+        # First, determine if this is a multi-expense input and split it
         completion = client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[
                 {
                     "role": "system", 
-                    "content": "You are a financial assistant that helps identify and separate expense entries with high accuracy."
+                    "content": "You are a financial assistant that helps identify and separate expense entries."
                 },
                 {
                     "role": "user", 
@@ -261,38 +318,15 @@ def handle_multiple_expenses(user_input):
                     If there are multiple expense entries, separate them into distinct entries.
                     Return ONLY a JSON with an 'expenses' array, where each item is a separate expense entry.
                     
-                    Handle these formats carefully:
-                    - Comma-separated lists: "coffee 50, lunch 200, taxi 150"
-                    - Line-separated entries: expenses on separate lines
-                    - Semi-colon separated entries: "coffee 50; lunch 200; taxi 150"
-                    - Natural language lists: "I spent 50 on coffee and 200 on lunch"
-                    - Multiple expenses with dates: "50 for lunch today and 30 for coffee yesterday"
-                    - Implicit separators: "spent 100 on groceries paid 50 for taxi"
-                    - Lists with conjunctions: "bought coffee for 25, lunch for 150, and a movie ticket for 200"
-                    
-                    Pay special attention to these challenging cases:
-                    - When expenses have complex descriptions: "dinner with friends at the Italian restaurant 500"
-                    - When numbers appear in descriptions: "iPhone 13 case 150"
-                    - When currencies and amounts have separators: "1,500 for groceries and 2,000 for rent"
-                    
                     Examples:
                     Input: "50 for lunch today and 20 for coffee yesterday"
                     Output: {{"expenses": ["50 for lunch today", "20 for coffee yesterday"]}}
                     
-                    Input: "bought groceries 1,750.50, movie tickets 300, and coffee 75"
-                    Output: {{"expenses": ["bought groceries 1,750.50", "movie tickets 300", "coffee 75"]}}
+                    Input: "Dining out 223 mcdo"
+                    Output: {{"expenses": ["Dining out 223 mcdo"]}}
                     
-                    Input: "paid 2k for rent and 500 for internet last week"
-                    Output: {{"expenses": ["paid 2k for rent", "500 for internet last week"]}}
-                    
-                    Input: "spent 300 on dinner with friends on Friday and 150 on groceries on Saturday morning"
-                    Output: {{"expenses": ["spent 300 on dinner with friends on Friday", "150 on groceries on Saturday morning"]}}
-                    
-                    If there's only one expense, still wrap it in an array.
-                    Input: "paid 100 for dinner"
-                    Output: {{"expenses": ["paid 100 for dinner"]}}
-                    
-                    Never include analytical notes or comments in your output, ONLY the JSON.
+                    Input: "spent 300 on dinner"
+                    Output: {{"expenses": ["spent 300 on dinner"]}}
                     """
                 }
             ],
@@ -324,7 +358,7 @@ def handle_multiple_expenses(user_input):
                 if expense_data:
                     # Format the extracted data as a dictionary for sheets
                     expense_record = {
-                        "Date": expense_data["date"],  # Use the extracted date
+                        "Date": expense_data["date"],
                         "Description": expense_data["description"],
                         "Amount": expense_data["amount"],
                         "Category": expense_data["category"],
@@ -336,13 +370,12 @@ def handle_multiple_expenses(user_input):
                     
                     # Format the date for display
                     try:
-                        # Parse the date and format it nicely
                         date_obj = datetime.datetime.strptime(expense_data["date"], "%Y-%m-%d")
-                        formatted_date = date_obj.strftime("%b %d, %Y")  # e.g., "Apr 11, 2025"
+                        formatted_date = date_obj.strftime("%b %d, %Y")
                     except:
                         formatted_date = expense_data["date"]
                     
-                    # Enhanced confirmation message with more details
+                    # Enhanced confirmation message
                     confirmation = (
                         f"✅ Got it! I've recorded ₱{expense_data['amount']:.2f} for "
                         f"{expense_data['description']} in the {expense_data['category']} "
@@ -365,4 +398,4 @@ def handle_multiple_expenses(user_input):
             return response
     
     except Exception as e:
-        return f"An error occurred while processing multiple expenses: {str(e)}"
+        return f"An error occurred while processing your expense: {str(e)}"

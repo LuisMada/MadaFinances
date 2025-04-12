@@ -502,25 +502,43 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # Message handler
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Process user messages and respond appropriately."""
+    """Process user messages and respond appropriately with improved detection."""
     user_input = update.message.text
     user_id = update.effective_user.id
     logger.info(f"Received message from {user_id}: {user_input}")
     
     try:
-        # Check if this is a category spending query using the new detector
-        is_category_query, category, period = openai_service.detect_category_spending_query(user_input)
+        # Try to log this as an expense first, since that's the most common use case
+        expense_match = False
         
-        if is_category_query:
-            # Handle category-specific spending query
-            await handle_category_spending_query(update, category, period)
-            return
+        # Check if this input looks like an expense entry
+        # Very simple pattern matching to catch the most common expense format
+        # This helps avoid confusion with category spending queries
+        words = user_input.split()
+        if len(words) >= 2:
+            # Check if second word is numeric or first word is numeric
+            second_word_is_numeric = len(words) >= 2 and any(c.isdigit() for c in words[1])
+            first_word_is_numeric = any(c.isdigit() for c in words[0])
             
+            if second_word_is_numeric or first_word_is_numeric:
+                expense_match = True
+        
+        # If it looks like an expense, process it directly without other checks
+        if expense_match:
+            response = expense_service.handle_multiple_expenses(user_input)
+            formatted_text, keyboard = telegram_ui.format_expense_response(response)
+            await update.message.reply_text(formatted_text, parse_mode='Markdown', reply_markup=keyboard)
+            return
+        
+        # If not an obvious expense, check other intents
         # Check if this is a summary request
         is_summary_request = openai_service.detect_summary_request(user_input)
         
         # Check if this is a budget request
         is_budget_request = openai_service.detect_budget_command(user_input)
+        
+        # Check if this is a category spending query - only if not an expense
+        is_category_query, category, period = openai_service.detect_category_spending_query(user_input)
         
         # Process based on intent
         if is_summary_request:
@@ -579,8 +597,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 logger.error(f"Error processing budget request: {str(e)}")
                 await update.message.reply_text(f"Error processing budget request: {str(e)}")
+        elif is_category_query:
+            # Handle category-specific spending query
+            await handle_category_spending_query(update, category, period)
         else:
-            # Assume it's an expense entry
+            # Assume it's an expense entry as a fallback
             response = expense_service.handle_multiple_expenses(user_input)
             formatted_text, keyboard = telegram_ui.format_expense_response(response)
             await update.message.reply_text(formatted_text, parse_mode='Markdown', reply_markup=keyboard)
