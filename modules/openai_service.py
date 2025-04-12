@@ -9,6 +9,7 @@ import datetime
 def detect_intent(user_input):
     """
     Detect the user's intent from their natural language input.
+    Improved to accurately identify expense entries.
     
     Args:
         user_input (str): Natural language input from the user
@@ -20,40 +21,57 @@ def detect_intent(user_input):
         # Create a client instance
         client = OpenAI(api_key=OPENAI_API_KEY)
         
-        # Use chat completions API
+        # Use chat completions API with improved prompt
         completion = client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[
                 {
                     "role": "system", 
-                    "content": "You are a financial assistant. Classify the user's intent from their message."
+                    "content": "You are a financial assistant that categorizes user messages into clear intents. Your primary purpose is to distinguish expense entries from other requests."
                 },
                 {
                     "role": "user", 
                     "content": f"""Classify this message: '{user_input}'. 
                     Return ONLY a JSON with 'intent' and 'data'.
-                    Possible intents:
-                    - expense (user is logging an expense)
-                    - summary (user wants to see a summary of expenses)
-                    - add_category (user wants to add a new expense category)
-                    - rename_category (user wants to rename a category)
-                    - delete_category (user wants to delete a category)
-                    - list_categories (user wants to see all categories)
-                    - set_budget (user wants to set or update a budget)
-                    - budget_status (user wants to check their budget status)
-                    - help (user needs help)
-                    - other (anything else)
                     
-                    For add_category, include 'name' and optional 'description'.
-                    For rename_category, include 'old_name' and 'new_name'.
-                    For delete_category, include 'name'.
-                    For summary, include 'period' (e.g., 'this week', 'last month').
-                    For set_budget, include 'amount', 'period' ('weekly' or 'monthly'), and optional 'category'.
-                    For budget_status, include optional 'period'.
+                    Intents are strictly one of:
+                    - "expense" (user is logging an expense)
+                    - "summary" (user wants to see a summary of expenses)
+                    - "budget_status" (user wants to check their budget status)
+                    - "set_budget" (user wants to set or update a budget)
+                    - "help" (user needs help)
+                    - "other" (anything else)
+                    
+                    IMPORTANT GUIDELINES:
+                    1. If the message contains a product/service name and an amount, classify as "expense"
+                    2. If the message is very short with just an item and a number, it's an "expense"
+                    3. Words like "summary", "report", "show me" suggest a "summary" intent
+                    4. Budget-related words like "budget", "spending limit" suggest "budget_status" or "set_budget"
+                    
+                    Examples of "expense" intent:
+                    - "puka necklace 150" -> expense
+                    - "burger 250" -> expense
+                    - "spent 223 on mcdonalds" -> expense
+                    - "50 coffee" -> expense
+                    - "dining out 500" -> expense
+                    - "payment for electricity bill 1200" -> expense
+                    
+                    Examples of "summary" intent:
+                    - "show my expenses this week" -> summary
+                    - "how much did I spend last month" -> summary
+                    - "give me my spending report" -> summary
+                    
+                    Examples of "budget_status" intent:
+                    - "how's my budget" -> budget_status
+                    - "am I over budget" -> budget_status
+                    
+                    For "expense" intent, include 'amount' and 'description' in data if possible.
+                    For "summary" intent, include 'period' (e.g., 'this week', 'last month') in data.
+                    For "set_budget", include 'amount' and 'period' ('weekly' or 'monthly') in data.
                     """
                 }
             ],
-            temperature=0.1
+            temperature=0
         )
         
         # Get the response content
