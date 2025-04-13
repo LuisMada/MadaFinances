@@ -590,17 +590,21 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     Log errors and send a message to the user.
     
     Args:
-        update (Update): The update object
+        update (Update): The update object (may be None)
         context (ContextTypes.DEFAULT_TYPE): The context object
     """
     logger.error(msg="Exception while handling an update:", exc_info=context.error)
     traceback.print_exc()
     
-    # Send a message to the user
+    # Send a message to the user if possible
     error_message = "Sorry, something went wrong. Please try again later."
     
-    if update.effective_message:
-        await update.effective_message.reply_text(error_message)
+    # Check if update exists and has a message
+    if update is not None and hasattr(update, 'effective_message') and update.effective_message:
+        try:
+            await update.effective_message.reply_text(error_message)
+        except Exception as e:
+            logger.error(f"Failed to send error message: {e}")
 
 def main():
     """Start the bot with simplified functionality but with custom budget handler."""
