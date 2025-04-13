@@ -62,6 +62,118 @@ class BudgetService:
                 "data": {}
             }
     
+    """
+    Budget status method for BudgetService
+    Add this method to your BudgetService class in budget.py
+    """
+
+    def get_budget_status(self, user_input=None):
+        """
+        Get current budget status with minimal processing.
+        
+        Args:
+            user_input (str, optional): Not used in simplified version
+            
+        Returns:
+            dict: Result with budget status
+        """
+        try:
+            # Get any active budget (simplified to just get the latest one)
+            budget = self.sheets.get_budget()
+            
+            if not budget:
+                return {
+                    "success": False,
+                    "message": "No active budget found. Set a budget first.",
+                    "data": {}
+                }
+            
+            # Get expenses for the budget period
+            start_date = self._date_from_str(budget.get('StartDate', datetime.datetime.now().strftime("%Y-%m-%d")))
+            end_date = datetime.datetime.now().date()
+            
+            category = budget.get('Category', 'all')
+            if category.lower() == 'all':
+                category = None  # Don't filter by category if it's "all"
+                
+            expenses = self.sheets.get_expenses_in_date_range(
+                start_date=start_date,
+                end_date=end_date,
+                category=category
+            )
+            
+            # Calculate total spent
+            total_spent = sum(float(exp.get('Amount', 0)) for exp in expenses)
+            
+            # Get budget amount
+            budget_amount = float(budget.get('Amount', 0))
+            
+            # Calculate remaining budget
+            remaining = budget_amount - total_spent
+            
+            # Calculate percentage used
+            percentage_used = (total_spent / budget_amount * 100) if budget_amount > 0 else 0
+            
+            # Determine status
+            if percentage_used >= 100:
+                status = "over_budget"
+                status_message = "You've exceeded your budget."
+            elif percentage_used >= 90:
+                status = "near_limit"
+                status_message = "You're close to your budget limit."
+            else:
+                status = "under_budget"
+                status_message = "You're under budget."
+            
+            # Calculate days info for custom periods
+            days_total = int(budget.get('Days', 30))
+            days_elapsed = (datetime.datetime.now().date() - start_date).days + 1
+            days_remaining = max(0, days_total - days_elapsed)
+            
+            daily_budget = budget_amount / days_total if days_total > 0 else 0
+            daily_average = total_spent / days_elapsed if days_elapsed > 0 else 0
+            
+            remaining_daily = remaining / days_remaining if days_remaining > 0 else 0
+            
+            result = {
+                "success": True,
+                "message": status_message,
+                "data": {
+                    "budget_amount": budget_amount,
+                    "total_spent": total_spent,
+                    "remaining": remaining,
+                    "percentage_used": percentage_used,
+                    "status": status,
+                    "period": budget.get('Period', 'custom'),
+                    "days_total": days_total,
+                    "days_elapsed": days_elapsed,
+                    "days_remaining": days_remaining,
+                    "daily_budget": daily_budget,
+                    "daily_average": daily_average,
+                    "remaining_daily": remaining_daily,
+                    "category": budget.get('Category', 'all')
+                }
+            }
+            
+            return result
+            
+        except Exception as e:
+            if DEBUG:
+                print(f"Error getting budget status: {str(e)}")
+            return {
+                "success": False,
+                "message": f"Error getting budget status: {str(e)}",
+                "data": {}
+            }
+
+    def _date_from_str(self, date_str):
+        """Convert string date to datetime.date object."""
+        try:
+            return datetime.datetime.strptime(date_str, "%Y-%m-%d").date()
+        except:
+            # Return today's date as fallback
+            return datetime.datetime.now().date()
+    
     def get_budget(self, category=None, period=None):
         """
         Get current budget status.

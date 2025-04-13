@@ -3,6 +3,7 @@ Financial Tracker Bot
 Main entry point for the Telegram bot.
 """
 import logging
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from telegram import Update
 from telegram.ext import (
     ApplicationBuilder, 
@@ -43,9 +44,17 @@ budget_service = BudgetService()
 summary_service = SummaryService()
 ui = TelegramUI()
 
+# Simple HTTP request handler for Render
+class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header('Content-type', 'text/plain')
+        self.end_headers()
+        self.wfile.write(b'Bot is running!')
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    Handle /start command.
+    Handle /start command with simplified interface.
     
     Args:
         update (Update): The update object
@@ -54,10 +63,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     
     await update.message.reply_text(
-        f"Hi {user.first_name}! I'm your AI Financial Tracker. I can help you track expenses, "
-        f"set budgets, and analyze your spending.\n\n"
-        f"Just type an expense like 'coffee 3.50' to get started!\n"
-        f"Or select an option from the menu below:",
+        f"Hi {user.first_name}! I'm your Financial Tracker Bot.\n\n"
+        f"• Type expenses like 'coffee 3.50' to log them\n"
+        f"• Set a budget with 'set 300 budget for 14 days'\n"
+        f"• Use the buttons below to view expenses or get help",
         reply_markup=ui.get_main_keyboard()
     )
 
@@ -77,7 +86,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def custom_budget_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    Handle /cb command to set custom period budgets.
+    Handle /cb command to set custom period budgets (simplified version).
     
     Args:
         update (Update): The update object
@@ -232,7 +241,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    Handle button callbacks.
+    Button handler that uses the date field from expenses for filtering.
     
     Args:
         update (Update): The update object
@@ -246,120 +255,83 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if DEBUG:
         logger.info(f"Button pressed: {callback_data}")
     
-    # Main menu options
-    if callback_data == "main_menu":
+    if callback_data == "todays_expenses":
+        await query.edit_message_text("Fetching today's expenses...")
+        
+        try:
+            # Get today's date
+            today = datetime.datetime.now().date()
+            today_str = today.strftime("%Y-%m-%d")
+            
+            # Get all recent expenses
+            # We'll get the last week of expenses and filter by date string
+            one_week_ago = today - datetime.timedelta(days=7)
+            all_expenses = expense_service.sheets.get_expenses_in_date_range(
+                start_date=one_week_ago,
+                end_date=today
+            )
+            
+            # Filter expenses that have today's date in their Date field
+            todays_expenses = []
+            for expense in all_expenses:
+                # Get the date from the expense data
+                expense_date = expense.get('Date', '')
+                
+                # Check if it's today's date
+                if expense_date == today_str:
+                    todays_expenses.append(expense)
+            
+            # Try to get budget information, but don't fail if it's not available
+            budget_data = None
+            try:
+                budget_status = budget_service.get_budget_status()
+                if budget_status and budget_status.get("success", False):
+                    budget_data = budget_status.get("data", {})
+            except Exception as e:
+                logger.error(f"Error getting budget status: {str(e)}")
+                # Continue without budget data
+            
+            # Format and send the message
+            message = ui.format_todays_expenses(todays_expenses, budget_data)
+            
+            await query.edit_message_text(
+                message,
+                parse_mode='Markdown',
+                reply_markup=ui.get_main_keyboard()
+            )
+        except Exception as e:
+            logger.error(f"Error handling today's expenses: {str(e)}")
+            traceback.print_exc()
+            await query.edit_message_text(
+                f"Error fetching expenses: {str(e)}",
+                reply_markup=ui.get_main_keyboard()
+            )
+    
+    elif callback_data == "help":
+        try:
+            await query.edit_message_text(
+                ui.format_help_message(),
+                parse_mode='Markdown',
+                reply_markup=ui.get_main_keyboard()
+            )
+        except Exception as e:
+            logger.error(f"Error displaying help: {str(e)}")
+            await query.edit_message_text(
+                "Error displaying help. Please try again.",
+                reply_markup=ui.get_main_keyboard()
+            )
+    
+    else:
+        # Default fallback
         await query.edit_message_text(
             "Please select an option:",
             reply_markup=ui.get_main_keyboard()
         )
-    
-    elif callback_data == "summary":
+        # Default fallback
         await query.edit_message_text(
-            "Select a time period for your summary:",
-            reply_markup=ui.get_summary_keyboard()
-        )
-    
-    elif callback_data == "budget":
-        await query.edit_message_text(
-            "Budget options:",
-            reply_markup=ui.get_budget_keyboard()
-        )
-    
-    elif callback_data == "delete_expense":
-        await query.edit_message_text(
-            "To delete an expense, please type a message like:\n\n"
-            "`delete coffee expense`\n"
-            "`remove taxi payment`",
-            parse_mode='Markdown',
+            "Please select an option:",
             reply_markup=ui.get_main_keyboard()
         )
-    
-    elif callback_data == "help":
-        await query.edit_message_text(
-            ui.format_help_message(),
-            parse_mode='Markdown',
-            reply_markup=ui.get_main_keyboard()
-        )
-    
-    # Summary options
-    elif callback_data.startswith("summary_"):
-        period = callback_data.replace("summary_", "")
-        
-        await query.edit_message_text("Generating summary, please wait...")
-        
-        # Generate summary based on selected period
-        result = summary_service.generate_summary(f"Summary for {period}")
-        
-        if result["success"]:
-            await query.edit_message_text(
-                result["message"],
-                reply_markup=ui.get_main_keyboard()
-            )
-        else:
-            await query.edit_message_text(
-                f"❌ {result['message']}",
-                reply_markup=ui.get_main_keyboard()
-            )
-    
-    # Budget options
-    elif callback_data == "budget_status":
-        await query.edit_message_text("Checking budget status, please wait...")
-        
-        result = budget_service.get_budget_status()
-        
-        if result["success"]:
-            await query.edit_message_text(
-                ui.format_budget_status(result["data"]),
-                reply_markup=ui.get_main_keyboard()
-            )
-        else:
-            await query.edit_message_text(
-                f"❌ {result['message']}",
-                reply_markup=ui.get_main_keyboard()
-            )
-    
-    # Custom period budget options
-    elif callback_data == "set_custom_budget":
-        await query.edit_message_text(
-            "📅 **Set a Custom Period Budget**\n\n"
-            "Select the number of days for your budget period:",
-            parse_mode='Markdown',
-            reply_markup=ui.get_custom_period_keyboard()
-        )
-        
-        return AWAITING_CUSTOM_DAYS
-    
-    elif callback_data.startswith("set_custom_budget_"):
-        # Extract days from callback data
-        days = callback_data.replace("set_custom_budget_", "")
-        
-        # Store the days in user data
-        context.user_data['custom_budget_days'] = int(days)
-        context.user_data['awaiting_custom_budget'] = True
-        
-        await query.edit_message_text(
-            f"Please enter the amount for your {days}-day budget:\n"
-            f"(e.g., 1000 for overall budget or 200 food for category budget)",
-            reply_markup=None
-        )
-        
-        return AWAITING_CUSTOM_BUDGET
-    
-    elif callback_data.startswith("set_"):
-        # Extract period from callback data
-        period = callback_data.replace("set_", "").replace("_budget", "")
-        
-        # Store the period in user data
-        context.user_data['awaiting_budget'] = True
-        context.user_data['budget_period'] = period
-        
-        await query.edit_message_text(
-            f"Please enter the amount for your {period} budget:\n"
-            f"(e.g., 1000 for overall budget or 200 food for category budget)",
-            reply_markup=None
-        )
-        
-        return AWAITING_BUDGET_AMOUNT
 
 async def handle_budget_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
@@ -394,7 +366,7 @@ async def handle_budget_input(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 async def handle_custom_days_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    Handle custom period days input.
+    Handle custom period days input (simplified version).
     
     Args:
         update (Update): The update object
@@ -419,8 +391,7 @@ async def handle_custom_days_input(update: Update, context: ContextTypes.DEFAULT
         context.user_data['awaiting_custom_budget'] = True
         
         await update.message.reply_text(
-            f"Please enter the amount for your {days}-day budget:\n"
-            f"(e.g., 1000 for overall budget or 200 food for category budget)"
+            f"Please enter the amount for your {days}-day budget:"
         )
         
         return AWAITING_CUSTOM_BUDGET
@@ -434,7 +405,7 @@ async def handle_custom_days_input(update: Update, context: ContextTypes.DEFAULT
 
 async def handle_custom_budget_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    Handle custom budget amount input with direct budget data construction.
+    Handle custom budget amount input (simplified version).
     
     Args:
         update (Update): The update object
@@ -447,11 +418,10 @@ async def handle_custom_budget_input(update: Update, context: ContextTypes.DEFAU
     context.user_data['awaiting_custom_budget'] = False
     
     try:
-        # Parse the input to extract amount and optional category
+        # Simple parsing - just extract the first number as the amount
         amount = 0
         category = "all"
         
-        # Simple parsing logic - first number is the amount
         parts = user_input.split()
         for part in parts:
             try:
@@ -467,21 +437,21 @@ async def handle_custom_budget_input(update: Update, context: ContextTypes.DEFAU
                 category = cat
                 break
         
-        # Create a budget data dictionary directly instead of parsing through AI
+        # Create a budget data dictionary
         today = datetime.datetime.now().strftime("%Y-%m-%d")
         budget_data = {
             "amount": amount,
             "period": "custom",
             "days": days,
             "category": category,
-            "start_date": today
+            "start_date": today,
+            "active": True
         }
         
-        # Set the budget using the budget service
+        # Set the budget
         result = budget_service.set_budget(budget_data)
         
         if result["success"]:
-            # Format for display
             await update.message.reply_text(
                 ui.format_custom_period_confirmation(result["data"]),
                 reply_markup=ui.get_main_keyboard()
@@ -523,58 +493,15 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.effective_message.reply_text(error_message)
 
 def main():
-    """Start the bot."""
+    """Start the bot with simplified functionality."""
     # Create the Application
     application = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
-    # Add conversation handler for budget setting
-    conv_handler = ConversationHandler(
-        entry_points=[
-            CallbackQueryHandler(button_handler, pattern=r"^set_")
-        ],
-        states={
-            AWAITING_BUDGET_AMOUNT: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_budget_input)
-            ],
-            AWAITING_CUSTOM_DAYS: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_custom_days_input),
-                CallbackQueryHandler(button_handler, pattern=r"^set_custom_budget_\d+$")
-            ],
-            AWAITING_CUSTOM_BUDGET: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_custom_budget_input)
-            ],
-        },
-        fallbacks=[CommandHandler("cancel", start)],
-        name="budget_conversation",
-        persistent=False,
-    )
-    
-    # Add custom budget command handler
-    custom_budget_handler = ConversationHandler(
-        entry_points=[CommandHandler("cb", custom_budget_command)],
-        states={
-            AWAITING_CUSTOM_DAYS: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_custom_days_input),
-                CallbackQueryHandler(button_handler, pattern=r"^set_custom_budget_\d+$")
-            ],
-            AWAITING_CUSTOM_BUDGET: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_custom_budget_input)
-            ],
-        },
-        fallbacks=[CommandHandler("cancel", start)],
-        name="custom_budget_conversation",
-        persistent=False,
-    )
-    
     # Add command handlers
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
     
-    # Add conversation handlers
-    application.add_handler(custom_budget_handler)
-    application.add_handler(conv_handler)
-    
-    # Add regular button handler (for buttons not in the conversation)
+    # Add regular button handler
     application.add_handler(CallbackQueryHandler(button_handler))
     
     # Add message handler

@@ -2,6 +2,7 @@
 Google Sheets Service
 Provides CRUD operations for the Google Sheets backend.
 """
+
 import gspread
 from google.oauth2.service_account import Credentials
 import os
@@ -18,6 +19,11 @@ from config import (
     DEBUG
 )
 
+import ssl
+
+# Create an unverified context
+ssl._create_default_https_context = ssl._create_unverified_context
+
 class SheetsService:
     def __init__(self):
         """Initialize the Google Sheets service."""
@@ -25,6 +31,7 @@ class SheetsService:
         self.spreadsheet = self.client.open_by_key(SHEET_ID)
         self._ensure_sheets_exist()
         
+    
     def _get_client(self):
         """
         Authenticate and return a Google Sheets client.
@@ -294,7 +301,17 @@ class SheetsService:
             all_values = worksheet.get_all_values()
             
             # Extract headers
-            headers = all_values[0]
+            if not all_values:
+                # Create headers if sheet is empty
+                headers = ["Amount", "Period", "Category", "StartDate", "Active", "Days"]
+                worksheet.append_row(headers)
+                print(f"Created headers in {BUDGETS_SHEET} worksheet")
+                all_values = [headers]
+            else:
+                headers = all_values[0]
+            
+            if DEBUG:
+                print(f"Found headers: {headers}")
             
             # Ensure all required fields are present
             required_fields = ["amount", "period", "category", "start_date"]
@@ -304,33 +321,55 @@ class SheetsService:
                     return False
             
             # Find indexes for key columns (case insensitive)
+            amount_index = None
             category_index = None
             period_index = None
             active_index = None
-            
-            for i, header in enumerate(headers):
-                if header.lower() == "category":
-                    category_index = i
-                elif header.lower() == "period":
-                    period_index = i
-                elif header.lower() == "active":
-                    active_index = i
-            
-            # If indexes weren't found, use defaults
-            if category_index is None:
-                category_index = 2
-            if period_index is None:
-                period_index = 1
-            if active_index is None:
-                active_index = 4
-                
-            # Check if there's a "Days" column, add it if needed
+            startdate_index = None
             days_index = None
+            
             for i, header in enumerate(headers):
-                if header.lower() == "days":
+                header_lower = header.lower()
+                if header_lower == "amount":
+                    amount_index = i
+                elif header_lower == "category":
+                    category_index = i
+                elif header_lower == "period":
+                    period_index = i
+                elif header_lower == "active":
+                    active_index = i
+                elif header_lower == "startdate":
+                    startdate_index = i
+                elif header_lower == "days":
                     days_index = i
-                    break
-                    
+            
+            # If indexes weren't found, add columns and set indexes
+            if amount_index is None:
+                headers.append("Amount")
+                worksheet.update_cell(1, len(headers), "Amount")
+                amount_index = len(headers) - 1
+                print(f"Added 'Amount' column at index {amount_index + 1}")
+                
+            if category_index is None:
+                headers.append("Category")
+                worksheet.update_cell(1, len(headers), "Category")
+                category_index = len(headers) - 1
+                
+            if period_index is None:
+                headers.append("Period")
+                worksheet.update_cell(1, len(headers), "Period")
+                period_index = len(headers) - 1
+                
+            if active_index is None:
+                headers.append("Active")
+                worksheet.update_cell(1, len(headers), "Active")
+                active_index = len(headers) - 1
+                
+            if startdate_index is None:
+                headers.append("StartDate")
+                worksheet.update_cell(1, len(headers), "StartDate")
+                startdate_index = len(headers) - 1
+                
             if days_index is None:
                 headers.append("Days")
                 worksheet.update_cell(1, len(headers), "Days")
@@ -338,7 +377,9 @@ class SheetsService:
             
             # Log the column indexes for debugging
             if DEBUG:
-                print(f"Column indexes: Category={category_index}, Period={period_index}, Active={active_index}, Days={days_index}")
+                print(f"Column indexes: Amount={amount_index}, Category={category_index}, "
+                    f"Period={period_index}, Active={active_index}, "
+                    f"StartDate={startdate_index}, Days={days_index}")
             
             # Check for existing budget entries for this category and period
             existing_row = None
@@ -356,33 +397,27 @@ class SheetsService:
                     existing_row = i
                     break
             
-            # Prepare the row data - ensure all values are strings
-            row = []
+            # Create a row with the exact length of headers, filled with empty strings
+            row = [""] * len(headers)
             
-            # Prepare data in the proper order based on headers
-            for header in headers:
-                if header.lower() == "amount":
-                    row.append(str(budget_data["amount"]))
-                elif header.lower() == "period":
-                    row.append(str(budget_data["period"]))
-                elif header.lower() == "category":
-                    row.append(str(budget_data["category"]))
-                elif header.lower() == "startdate":
-                    row.append(str(budget_data["start_date"]))
-                elif header.lower() == "active":
-                    row.append("TRUE")  # Explicitly use uppercase TRUE
-                elif header.lower() == "days":
-                    if budget_data["period"].lower() == "custom" and "days" in budget_data:
-                        row.append(str(budget_data["days"]))
-                    elif budget_data["period"].lower() == "weekly":
-                        row.append("7")
-                    elif budget_data["period"].lower() == "monthly":
-                        row.append("30")
-                    else:
-                        row.append("")
-                else:
-                    # For any other headers, add an empty value
-                    row.append("")
+            # Now fill in the values at the appropriate indexes
+            row[amount_index] = str(budget_data["amount"])
+            row[period_index] = str(budget_data["period"])
+            row[category_index] = str(budget_data["category"])
+            row[startdate_index] = str(budget_data["start_date"])
+            row[active_index] = "TRUE"  # Explicitly use uppercase TRUE
+            
+            # Handle days field
+            if days_index is not None:
+                if budget_data["period"].lower() == "custom" and "days" in budget_data:
+                    row[days_index] = str(budget_data["days"])
+                elif budget_data["period"].lower() == "weekly":
+                    row[days_index] = "7"
+                elif budget_data["period"].lower() == "monthly":
+                    row[days_index] = "30"
+            
+            if DEBUG:
+                print(f"Row to append: {row}")
             
             # Update existing row or append new one
             if existing_row:
@@ -480,85 +515,25 @@ class SheetsService:
             traceback.print_exc()
             return None
     
-    # Preference Methods
-    def get_preference(self, user_id, setting):
-        """
-        Get a user preference.
-        
-        Args:
-            user_id (str): User identifier
-            setting (str): Setting name
-        
-        Returns:
-            str: Setting value or None if not found
-        """
-        try:
-            # Select the "Preferences" worksheet
-            worksheet = self.spreadsheet.worksheet(PREFERENCES_SHEET)
-            
-            # Get all values including headers
-            all_values = worksheet.get_all_values()
-            
-            # Check if there's data (should be at least headers)
-            if len(all_values) <= 1:
-                return None
-                
-            # Find the preference
-            for row in all_values[1:]:  # Skip header
-                if row[0] == str(user_id) and row[1] == setting:
-                    return row[2]
-            
-            return None
-            
-        except Exception as e:
-            print(f"Error retrieving preference: {str(e)}")
-            traceback.print_exc()
-            return None
-    
-    def set_preference(self, user_id, setting, value):
-        """
-        Set a user preference.
-        
-        Args:
-            user_id (str): User identifier
-            setting (str): Setting name
-            value (str): Setting value
-        
-        Returns:
-            bool: True if successful
-        """
-        try:
-            # Select the "Preferences" worksheet
-            worksheet = self.spreadsheet.worksheet(PREFERENCES_SHEET)
-            
-            # Get all values including headers
-            all_values = worksheet.get_all_values()
-            
-            # Find if the preference already exists
-            existing_row = None
-            for i, row in enumerate(all_values[1:], start=2):  # Start from 2 to account for header
-                if row[0] == str(user_id) and row[1] == setting:
-                    existing_row = i
-                    break
-            
-            # Update or append
-            if existing_row:
-                worksheet.update_cell(existing_row, 3, value)
-            else:
-                worksheet.append_row([str(user_id), setting, value])
-            
-            return True
-            
-        except Exception as e:
-            print(f"Error setting preference: {str(e)}")
-            traceback.print_exc()
-            return False
-    
-    # Helper Methods
+    """
+Add this _date_from_str method to your SheetsService class in sheets.py
+"""
+
     def _date_from_str(self, date_str):
-        """Convert string date to datetime.date object."""
+        """
+        Convert string date to datetime.date object.
+        
+        Args:
+            date_str (str): Date string in YYYY-MM-DD format
+            
+        Returns:
+            datetime.date: Converted date object or fallback date
+        """
         try:
             return datetime.datetime.strptime(date_str, "%Y-%m-%d").date()
-        except:
+        except Exception as e:
             # Return a very old date as fallback
+            if DEBUG:
+                print(f"Error converting date '{date_str}': {str(e)}")
             return datetime.datetime(1970, 1, 1).date()
+    

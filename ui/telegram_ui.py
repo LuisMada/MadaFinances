@@ -1,230 +1,143 @@
 """
-Telegram UI Module
-Handles UI components and formatting for the Telegram bot.
+Simplified Telegram UI Components
+Contains only essential keyboard layouts and formatting functions.
 """
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-import datetime
 
 class TelegramUI:
-    """Handles UI components and formatting for the Telegram bot."""
+    def __init__(self):
+        """Initialize UI components."""
+        pass
     
     def get_main_keyboard(self):
-        """Return the main menu keyboard."""
+        """
+        Get the simplified main menu keyboard with only Today's Expenses and Help.
+        
+        Returns:
+            InlineKeyboardMarkup: Main menu keyboard
+        """
         keyboard = [
             [
-                InlineKeyboardButton("📊 Summary", callback_data="summary"),
-                InlineKeyboardButton("💰 Budget", callback_data="budget")
+                InlineKeyboardButton("📊 Today's Expenses", callback_data="todays_expenses")
             ],
             [
-                InlineKeyboardButton("🗑️ Delete Expense", callback_data="delete_expense"),
                 InlineKeyboardButton("❓ Help", callback_data="help")
             ]
         ]
+        
         return InlineKeyboardMarkup(keyboard)
     
-    def get_summary_keyboard(self):
-        """Return the summary options keyboard."""
-        keyboard = [
-            [
-                InlineKeyboardButton("Today", callback_data="summary_today"),
-                InlineKeyboardButton("This Week", callback_data="summary_this_week"),
-                InlineKeyboardButton("This Month", callback_data="summary_this_month")
-            ],
-            [
-                InlineKeyboardButton("Last Week", callback_data="summary_last_week"),
-                InlineKeyboardButton("Last Month", callback_data="summary_last_month")
-            ],
-            [
-                InlineKeyboardButton("« Back to Main Menu", callback_data="main_menu")
-            ]
-        ]
-        return InlineKeyboardMarkup(keyboard)
-    
-    def get_budget_keyboard(self):
-        """Return the budget options keyboard."""
-        keyboard = [
-            [
-                InlineKeyboardButton("Check Status", callback_data="budget_status")
-            ],
-            [
-                InlineKeyboardButton("Set Weekly Budget", callback_data="set_weekly_budget"),
-                InlineKeyboardButton("Set Monthly Budget", callback_data="set_monthly_budget")
-            ],
-            [
-                InlineKeyboardButton("Set Custom Period Budget", callback_data="set_custom_budget")
-            ],
-            [
-                InlineKeyboardButton("« Back to Main Menu", callback_data="main_menu")
-            ]
-        ]
-        return InlineKeyboardMarkup(keyboard)
-    
-    def get_custom_period_keyboard(self):
-        """Return the custom period selection keyboard."""
-        keyboard = [
-            [
-                InlineKeyboardButton("3 Days", callback_data="set_custom_budget_3"),
-                InlineKeyboardButton("5 Days", callback_data="set_custom_budget_5"),
-                InlineKeyboardButton("7 Days", callback_data="set_custom_budget_7")
-            ],
-            [
-                InlineKeyboardButton("10 Days", callback_data="set_custom_budget_10"),
-                InlineKeyboardButton("14 Days", callback_data="set_custom_budget_14"),
-                InlineKeyboardButton("21 Days", callback_data="set_custom_budget_21")
-            ],
-            [
-                InlineKeyboardButton("Custom...", callback_data="set_custom_budget_custom"),
-                InlineKeyboardButton("« Back", callback_data="budget")
-            ]
-        ]
-        return InlineKeyboardMarkup(keyboard)
-    
-    def format_help_message(self):
-        """Return a formatted help message."""
-        return (
-            "📱 *Financial Tracker Bot Help*\n\n"
-            "*Track Expenses*\n"
-            "Simply type an expense like:\n"
-            "`coffee 3.50`\n"
-            "`lunch 12.99 food`\n"
-            "`taxi 15 transportation yesterday`\n\n"
+    def format_todays_expenses(self, expenses, budget_data=None):
+        """
+        Format today's expenses with budget information.
+        
+        Args:
+            expenses (list): List of expenses for today
+            budget_data (dict, optional): Budget data
             
-            "*Multiple Expenses*\n"
-            "You can log multiple expenses in one message:\n"
-            "`coffee 3.50, lunch 12.99`\n\n"
-            
-            "*Budget Commands*\n"
-            "Set a budget:\n"
-            "`set monthly budget 1000`\n"
-            "`set weekly food budget 200`\n"
-            "`set budget 500 for next 14 days`\n\n"
-            
-            "*Check Status*\n"
-            "`budget status`\n"
-            "`how much left in budget`\n\n"
-            
-            "*Get Summaries*\n"
-            "`summary for this week`\n"
-            "`spending this month`\n"
-            "`expenses yesterday`\n\n"
-            
-            "*Delete Expenses*\n"
-            "`delete coffee expense`\n"
-            "`remove taxi payment`"
-        )
+        Returns:
+            str: Formatted message
+        """
+        if not expenses:
+            return "No expenses recorded for today."
+        
+        # Calculate total spent today
+        try:
+            total_spent = sum(float(exp.get('Amount', 0)) for exp in expenses)
+        except:
+            # Handle case where Amount might not be a number
+            total_spent = 0
+            for exp in expenses:
+                try:
+                    amount = float(exp.get('Amount', 0))
+                    total_spent += amount
+                except:
+                    pass
+        
+        # Start building the message
+        message = "📋 **Today's Expenses**\n\n"
+        
+        # List all expenses
+        for i, expense in enumerate(expenses, 1):
+            try:
+                description = expense.get('Description', 'Unknown')
+                amount = expense.get('Amount', '0.00')
+                category = expense.get('Category', 'Other')
+                message += f"{i}. {description} - {amount} ({category})\n"
+            except:
+                # Skip expenses that cause formatting errors
+                message += f"{i}. [Error formatting expense]\n"
+        
+        # Add total
+        message += f"\n**Total spent today**: {total_spent:.2f}\n"
+        
+        # Add budget information if available
+        if budget_data:
+            try:
+                budget_amount = float(budget_data.get('budget_amount', 0))
+                remaining = float(budget_data.get('remaining', 0))
+                days_remaining = int(budget_data.get('days_remaining', 0))
+                
+                message += f"\n**Budget Information**:\n"
+                message += f"Budget: {budget_amount:.2f}\n"
+                message += f"Remaining: {remaining:.2f}\n"
+                message += f"Days left: {days_remaining}\n"
+                
+                # Add daily allowance if there are days remaining
+                if days_remaining > 0:
+                    daily_allowance = remaining / days_remaining
+                    message += f"Daily allowance: {daily_allowance:.2f}\n"
+            except Exception as e:
+                # If there's an error formatting budget data, just show a simple message
+                message += "\n**Budget Information**: Available but could not be displayed\n"
+        else:
+            message += "\n*No active budget found. Set a budget with 'set 300 budget for 14 days'*"
+        
+        return message
     
     def format_expense_confirmation(self, expense_data):
-        """Format an expense confirmation message."""
-        # Format the date
-        try:
-            date_obj = datetime.datetime.strptime(expense_data["date"], "%Y-%m-%d").date()
-            formatted_date = date_obj.strftime("%b %d")
-        except:
-            formatted_date = expense_data["date"]
+        """
+        Format an expense confirmation message.
         
-        # Create the confirmation message
-        msg = f"✅ Logged expense: {expense_data['description']}\n"
-        msg += f"💲 Amount: {expense_data['amount']}\n"
-        msg += f"🗂️ Category: {expense_data['category']}\n"
-        msg += f"📅 Date: {formatted_date}"
+        Args:
+            expense_data (dict): Expense data
+            
+        Returns:
+            str: Formatted message
+        """
+        amount = expense_data.get("amount", 0)
+        description = expense_data.get("description", "expense")
+        category = expense_data.get("category", "Other")
+        date = expense_data.get("date", "today")
         
-        return msg
+        message = f"✅ Logged: {amount} for {description}\n"
+        message += f"Category: {category}, Date: {date}"
+        
+        return message
     
-    def format_budget_confirmation(self, budget_data):
-        """Format a budget confirmation message."""
-        period = budget_data.get("period", "monthly").capitalize()
-        category = budget_data.get("category", "all")
-        amount = budget_data.get("amount", 0)
+    def format_help_message(self):
+        """
+        Format the simplified help message.
         
-        # Format category description
-        category_desc = f"for {category}" if category.lower() != "all" else "overall"
+        Returns:
+            str: Formatted help message
+        """
+        help_text = (
+            "🤖 **Financial Tracker Bot Help**\n\n"
+            
+            "📝 **Logging Expenses**\n"
+            "• Type `coffee 3.50` to log an expense\n"
+            "• You can include a category: `lunch 12 food`\n"
+            "• Multiple expenses: `coffee 3.50, taxi 15`\n\n"
+            
+            "💰 **Budget Management**\n"
+            "• Set a budget: `set 300 budget for 14 days`\n\n"
+            
+            "📊 **View Expenses**\n"
+            "• Click 'Today's Expenses' button to see today's spending\n\n"
+            
+            "🗑️ **Deleting Expenses**\n"
+            "• Type: `delete coffee` to remove coffee expenses\n"
+        )
         
-        msg = f"✅ Budget set: {period} budget {category_desc}\n"
-        msg += f"💰 Amount: {amount}\n"
-        
-        # Add start date if available
-        if "start_date" in budget_data:
-            try:
-                date_obj = datetime.datetime.strptime(budget_data["start_date"], "%Y-%m-%d").date()
-                formatted_date = date_obj.strftime("%b %d")
-                msg += f"📅 Starting: {formatted_date}"
-            except:
-                msg += f"📅 Starting: {budget_data['start_date']}"
-        
-        return msg
-    
-    def format_custom_period_confirmation(self, budget_data):
-        """Format a custom period budget confirmation message."""
-        days = budget_data.get("days", 30)
-        category = budget_data.get("category", "all")
-        amount = budget_data.get("amount", 0)
-        
-        # Format category description
-        category_desc = f"for {category}" if category.lower() != "all" else "overall"
-        
-        msg = f"✅ Budget set: {days}-day budget {category_desc}\n"
-        msg += f"💰 Amount: {amount}\n"
-        
-        # Add start and end dates
-        if "start_date" in budget_data:
-            try:
-                start_date = datetime.datetime.strptime(budget_data["start_date"], "%Y-%m-%d").date()
-                end_date = start_date + datetime.timedelta(days=days-1)
-                
-                formatted_start = start_date.strftime("%b %d")
-                formatted_end = end_date.strftime("%b %d")
-                
-                msg += f"📅 Period: {formatted_start} to {formatted_end} ({days} days)"
-            except:
-                msg += f"📅 Period: {days} days starting {budget_data['start_date']}"
-        
-        return msg
-    
-    def format_budget_status(self, budget_status):
-        """Format a budget status message."""
-        if not budget_status.get("has_budget", False):
-            return "📊 **Budget Status**\n\nNo active budget found. Set a budget first with a command like 'Set ₱1000 for next 7 days'."
-        
-        # Basic budget info
-        period_type = budget_status["period"]["period_type"]
-        
-        # Format period description based on type
-        if period_type == "custom":
-            period_desc = f"{budget_status['period']['total_days']}-day period"
-        else:
-            period_desc = period_type.capitalize()
-        
-        # Format dates
-        start_date = datetime.datetime.strptime(budget_status["period"]["start_date"], "%Y-%m-%d").strftime("%b %d")
-        end_date = datetime.datetime.strptime(budget_status["period"]["end_date"], "%Y-%m-%d").strftime("%b %d")
-        
-        # Format the status emoji
-        status_emoji = "✅"  # under_budget
-        if budget_status.get("status") == "over_budget":
-            status_emoji = "❌"
-        elif budget_status.get("status") == "near_limit":
-            status_emoji = "⚠️"
-        
-        # Create the response
-        response = f"📊 **{period_desc} Budget Status** ({start_date} - {end_date})\n\n"
-        
-        # Budget overview
-        response += f"{status_emoji} **Budget:** {float(budget_status['budget']['Amount']):.2f}\n"
-        response += f"💰 **Spent so far:** {budget_status['total_spent']:.2f} ({budget_status['percent_used']:.1f}%)\n"
-        response += f"🔢 **Remaining:** {budget_status['remaining']:.2f}\n\n"
-        
-        # Period progress
-        days_elapsed = budget_status.get("days_elapsed", 0)
-        total_days = budget_status["period"]["total_days"]
-        response += f"⏳ **Period Progress:** {days_elapsed} of {total_days} days " + \
-                   f"({(days_elapsed/total_days)*100:.1f}%)\n\n"
-        
-        # Daily breakdown
-        response += "📅 **Daily Breakdown:**\n"
-        response += f"• Budget per day: {budget_status['daily_budget']:.2f}\n"
-        response += f"• Average spent per day: {budget_status['daily_average']:.2f}\n"
-        
-        if budget_status.get("days_remaining", 0) > 0:
-            response += f"• Remaining daily allowance: {budget_status.get('remaining_daily_allowance', 0):.2f}\n"
-        
-        return response
+        return help_text
