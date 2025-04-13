@@ -83,10 +83,9 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode='Markdown',
         reply_markup=ui.get_main_keyboard()
     )
-
 async def custom_budget_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    Handle /cb command to set custom period budgets (simplified version).
+    Handle /cb command to set custom period budgets.
     
     Args:
         update (Update): The update object
@@ -100,6 +99,117 @@ async def custom_budget_command(update: Update, context: ContextTypes.DEFAULT_TY
     )
     
     return AWAITING_CUSTOM_DAYS
+
+async def handle_custom_days_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Handle custom period days input (simplified version).
+    
+    Args:
+        update (Update): The update object
+        context (ContextTypes.DEFAULT_TYPE): The context object
+    """
+    user_input = update.message.text
+    
+    try:
+        # Try to parse the days as an integer
+        days = int(user_input)
+        
+        if days < 1 or days > 365:
+            await update.message.reply_text(
+                "Please enter a valid number of days between 1 and 365.",
+                reply_markup=ui.get_main_keyboard()
+            )
+            return AWAITING_CUSTOM_DAYS
+        
+        # Store the days and update state
+        context.user_data['custom_budget_days'] = days
+        context.user_data['awaiting_custom_days'] = False
+        context.user_data['awaiting_custom_budget'] = True
+        
+        await update.message.reply_text(
+            f"Please enter the amount for your {days}-day budget:"
+        )
+        
+        return AWAITING_CUSTOM_BUDGET
+        
+    except ValueError:
+        await update.message.reply_text(
+            "Please enter a valid number of days.",
+            reply_markup=ui.get_main_keyboard()
+        )
+        return AWAITING_CUSTOM_DAYS
+
+async def handle_custom_budget_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Handle custom budget amount input (simplified version).
+    
+    Args:
+        update (Update): The update object
+        context (ContextTypes.DEFAULT_TYPE): The context object
+    """
+    user_input = update.message.text
+    days = context.user_data.get('custom_budget_days', 30)  # Default to 30 if not set
+    
+    # Reset the awaiting flag
+    context.user_data['awaiting_custom_budget'] = False
+    
+    try:
+        # Simple parsing - just extract the first number as the amount
+        amount = 0
+        category = "all"
+        
+        parts = user_input.split()
+        for part in parts:
+            try:
+                amount = float(part.replace(',', ''))
+                break  # Take the first valid number as amount
+            except ValueError:
+                continue
+        
+        # Check if a category is mentioned
+        categories = budget_service.sheets.get_categories()
+        for cat in categories:
+            if cat.lower() in user_input.lower():
+                category = cat
+                break
+        
+        # Create a budget data dictionary
+        today = datetime.datetime.now().strftime("%Y-%m-%d")
+        budget_data = {
+            "amount": amount,
+            "period": "custom",
+            "days": days,
+            "category": category,
+            "start_date": today,
+            "active": True
+        }
+        
+        # Set the budget
+        result = budget_service.set_budget(budget_data)
+        
+        if result["success"]:
+            await update.message.reply_text(
+                ui.format_custom_period_confirmation(result["data"]),
+                reply_markup=ui.get_main_keyboard()
+            )
+        else:
+            await update.message.reply_text(
+                f"❌ {result['message']}",
+                reply_markup=ui.get_main_keyboard()
+            )
+    except Exception as e:
+        logger.error(f"Error setting custom budget: {str(e)}")
+        traceback.print_exc()
+        await update.message.reply_text(
+            f"❌ Error setting budget: {str(e)}",
+            reply_markup=ui.get_main_keyboard()
+        )
+    
+    # Clean up user data
+    if 'custom_budget_days' in context.user_data:
+        del context.user_data['custom_budget_days']
+    
+    return ConversationHandler.END
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
@@ -493,13 +603,33 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.effective_message.reply_text(error_message)
 
 def main():
-    """Start the bot with simplified functionality."""
+    """Start the bot with simplified functionality but with custom budget handler."""
     # Create the Application
     application = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+
+    # Add custom budget command handler
+    custom_budget_handler = ConversationHandler(
+        entry_points=[CommandHandler("cb", custom_budget_command)],
+        states={
+            AWAITING_CUSTOM_DAYS: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_custom_days_input),
+                CallbackQueryHandler(button_handler, pattern=r"^set_custom_budget_\d+$")
+            ],
+            AWAITING_CUSTOM_BUDGET: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_custom_budget_input)
+            ],
+        },
+        fallbacks=[CommandHandler("cancel", start)],
+        name="custom_budget_conversation",
+        persistent=False,
+    )
 
     # Add command handlers
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
+    
+    # Add conversation handler for custom budget
+    application.add_handler(custom_budget_handler)
     
     # Add regular button handler
     application.add_handler(CallbackQueryHandler(button_handler))

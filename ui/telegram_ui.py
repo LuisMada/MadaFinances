@@ -141,3 +141,60 @@ class TelegramUI:
         )
         
         return help_text
+    
+    """
+    Add this method to your TelegramUI class in telegram_ui.py
+    """
+
+    def get_custom_period_keyboard(self):
+        """
+        Get the custom period selection keyboard.
+        
+        Returns:
+            InlineKeyboardMarkup: Custom period keyboard
+        """
+        keyboard = [
+            [
+                InlineKeyboardButton("3 Days", callback_data="set_custom_budget_3"),
+                InlineKeyboardButton("7 Days", callback_data="set_custom_budget_7"),
+                InlineKeyboardButton("14 Days", callback_data="set_custom_budget_14")
+            ],
+            [
+                InlineKeyboardButton("30 Days", callback_data="set_custom_budget_30"),
+                InlineKeyboardButton("90 Days", callback_data="set_custom_budget_90")
+            ],
+            [
+                InlineKeyboardButton("Custom Number", callback_data="set_custom_budget_input"),
+                InlineKeyboardButton("Back", callback_data="help")
+            ]
+        ]
+        
+        return InlineKeyboardMarkup(keyboard)
+
+    def format_custom_period_confirmation(self, budget_data):
+        """
+        Format a custom period budget confirmation message.
+        
+        Args:
+            budget_data (dict): Budget data
+            
+        Returns:
+            str: Formatted message
+        """
+        days = budget_data.get("days", 30)
+        category = budget_data.get("category", "all")
+        amount = budget_data.get("amount", 0)
+        
+        message = f"✅ Custom Budget Set: {amount} for {days} days"
+        
+        # Add category if it's not 'all'
+        if category.lower() != "all":
+            message += f" ({category} category)"
+        
+        # Add start date if available
+        if "start_date" in budget_data:
+            message += f"\nStarting: {budget_data['start_date']}"
+        
+        message += "\n\nUse the 'Today's Expenses' button to check your current spending status."
+        
+        return message
