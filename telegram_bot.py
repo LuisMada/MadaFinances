@@ -1,672 +1,602 @@
-# telegram_bot.py
-import os
+"""
+Financial Tracker Bot
+Main entry point for the Telegram bot.
+"""
 import logging
-import threading
-from http.server import HTTPServer, BaseHTTPRequestHandler
 from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
-from dotenv import load_dotenv
+from telegram.ext import (
+    ApplicationBuilder, 
+    CommandHandler, 
+    MessageHandler, 
+    CallbackQueryHandler,
+    ConversationHandler,
+    filters, 
+    ContextTypes
+)
+import traceback
+import os
 import datetime
 
-# Import your existing services
-from modules import expense_service, expense_summary_service, budget_service
-from modules import category_service, openai_service, telegram_ui, preference_service
+from config import TELEGRAM_TOKEN, DEBUG
+from services.ai_agent import AIAgent
+from services.expense import ExpenseService
+from services.budget import BudgetService
+from services.summary import SummaryService
+from ui.telegram_ui import TelegramUI
 
-if not logging.getLogger().handlers:
-    logging.basicConfig(
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        level=logging.INFO
-    )
-logger = logging.getLogger(__name__)
-
-# Configure logging
+# Enable logging
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# Load environment variables
-load_dotenv()
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+# Conversation states
+AWAITING_BUDGET_AMOUNT = 1
+AWAITING_CUSTOM_DAYS = 2
+AWAITING_CUSTOM_BUDGET = 3
 
-# Simple HTTP request handler for Render
-class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.send_header('Content-type', 'text/plain')
-        self.end_headers()
-        self.wfile.write(b'Bot is running!')
+# Initialize services
+ai_agent = AIAgent()
+expense_service = ExpenseService()
+budget_service = BudgetService()
+summary_service = SummaryService()
+ui = TelegramUI()
 
-# Function to start HTTP server
-def start_http_server():
-    port = int(os.environ.get("PORT", 8080))
-    server = HTTPServer(('0.0.0.0', port), SimpleHTTPRequestHandler)
-    logger.info(f'Starting HTTP server on port {port}')
-    server.serve_forever()
-
-# Command handlers
-async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Send a welcome message when the command /start is issued."""
-    user_id = update.effective_user.id
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Handle /start command.
     
-    # Set default week start day preference if not already set
-    if preference_service.get_user_preference(user_id, "week_start_day") is None:
-        preference_service.set_week_start_day(user_id, 0)  # Default to Monday
+    Args:
+        update (Update): The update object
+        context (ContextTypes.DEFAULT_TYPE): The context object
+    """
+    user = update.effective_user
     
-    welcome_message = (
-        "👋 Welcome to your Financial Tracker!\n\n"
-        "You can:\n"
-        "• Log expenses like \"spent 500 on lunch\"\n"
-        "• Get summaries with \"show expenses this week\"\n"
-        "• Set budgets with \"set 5000 monthly budget\"\n"
-        "• Change settings with \"/weekstart\" to set week start day\n\n"
-        "Type /help for more information."
+    await update.message.reply_text(
+        f"Hi {user.first_name}! I'm your AI Financial Tracker. I can help you track expenses, "
+        f"set budgets, and analyze your spending.\n\n"
+        f"Just type an expense like 'coffee 3.50' to get started!\n"
+        f"Or select an option from the menu below:",
+        reply_markup=ui.get_main_keyboard()
     )
-    # Add inline keyboard for quick actions
-    keyboard = telegram_ui.get_help_keyboard()
-    await update.message.reply_text(welcome_message, reply_markup=keyboard)
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Send a help message when the command /help is issued."""
-    help_text = (
-        "📝 **How to use this bot:**\n\n"
-        "**Log expenses**\n• Just type what you spent money on\n• Example: \"Spent ₱1225 on lunch yesterday\"\n\n"
-        "**Get summaries**\n• Ask for expense summaries\n• Example: \"Show my expenses this week\"\n\n"
-        "**Budget management**\n• Set or check budgets\n• Example: \"Set ₱5000 monthly budget\"\n\n"
-        "**Categories**\n• List categories: \"/categories\"\n\n"
-        "**Preferences**\n• Set week start day: \"/weekstart\"\n\n"
-        "**Shortcuts**\n"
-        "• /sum - Show this week's expenses\n"
-        "• /b - Check budget status\n"
-        "• /e - Quick expense entry template\n\n"
-        "View your dashboard at: [your-render-app-url]"
-    )
-    # Add inline keyboard for quick actions
-    keyboard = telegram_ui.get_help_keyboard()
-    await update.message.reply_text(help_text, parse_mode='Markdown', reply_markup=keyboard)
-
-async def categories_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """List all available expense categories."""
-    try:
-        categories = category_service.get_categories()
-        if not categories:
-            await update.message.reply_text("No categories found.")
-            return
-            
-        categories_list = "\n".join([f"• {category}" for category in categories])
-        await update.message.reply_text(f"📋 **Available categories:**\n{categories_list}", parse_mode='Markdown')
-    except Exception as e:
-        logger.error(f"Error listing categories: {str(e)}")
-        await update.message.reply_text(f"Error listing categories: {str(e)}")
-
-async def summary_shortcut_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Shortcut command to show expense summary for this week."""
-    user_id = update.effective_user.id
-    logger.info(f"Summary shortcut requested by {user_id}")
-    
-    try:
-        # Get user's preferred week start day
-        week_start_index = preference_service.get_week_start_day(user_id)
-        
-        # Calculate the current week's start and end using the user's preference
-        today = datetime.date.today()
-        days_since_week_start = (today.weekday() - week_start_index) % 7
-        start_of_week = today - datetime.timedelta(days=days_since_week_start)
-        end_of_week = start_of_week + datetime.timedelta(days=6)
-        
-        # Get expenses for the current week based on user's preference
-        df = expense_summary_service.get_expenses_in_period(start_of_week, end_of_week)
-        
-        # Generate summary
-        summary = expense_summary_service.generate_summary(df)
-        
-        # Create period info with custom week start day
-        weekday_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-        week_start_day = weekday_names[week_start_index] if 0 <= week_start_index <= 6 else "Monday"
-        
-        period = {
-            "start_date": start_of_week,
-            "end_date": end_of_week,
-            "period_name": f"This Week (Starting {week_start_day})"
-        }
-        
-        # Format the response
-        response = expense_summary_service.format_summary_response(summary, period)
-        
-        # Add detailed list of expenses if there are any
-        if not df.empty:
-            # Sort by date (newest first)
-            df_sorted = df.sort_values('Date', ascending=False)
-            
-            # Format the detailed list
-            response += "\n\n**Detailed Expenses:**\n"
-            
-            for _, row in df_sorted.iterrows():
-                date_str = row['Date'].strftime("%b %d") if hasattr(row['Date'], 'strftime') else str(row['Date'])
-                amount = float(row['Amount'])
-                description = row['Description']
-                category = row['Category']
-                response += f"• {date_str}: ₱{amount:.2f} - {description} ({category})\n"
-        
-        # Send the response
-        formatted_text, keyboard = telegram_ui.format_summary_response(response)
-        await update.message.reply_text(formatted_text, parse_mode='Markdown', reply_markup=keyboard)
-    except Exception as e:
-        logger.error(f"Error generating summary via shortcut: {str(e)}")
-        await update.message.reply_text(f"Error generating summary: {str(e)}")
-
-async def budget_shortcut_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Shortcut command to check budget status with weekly focus."""
-    user_id = update.effective_user.id
-    logger.info(f"Budget status shortcut requested by {user_id}")
-    
-    try:
-        # Get user's preferred week start day
-        week_start_index = preference_service.get_week_start_day(user_id)
-        
-        # Use weekly period for budget status
-        today = datetime.date.today()
-        # Calculate the current week's start and end using the user's preference
-        days_since_week_start = (today.weekday() - week_start_index) % 7
-        start_of_week = today - datetime.timedelta(days=days_since_week_start)
-        end_of_week = start_of_week + datetime.timedelta(days=6)
-        
-        # Get budget status using the week dates and week start preference
-        budget_status = budget_service.get_budget_status(start_of_week, end_of_week, week_start_index=week_start_index)
-        
-        # Format with enhanced weekly focus
-        response = format_weekly_budget_status(budget_status)
-        
-        # Use the budget keyboard for response
-        formatted_text, keyboard = telegram_ui.format_budget_response(response)
-        await update.message.reply_text(formatted_text, parse_mode='Markdown', reply_markup=keyboard)
-    except Exception as e:
-        logger.error(f"Error checking budget status via shortcut: {str(e)}")
-        await update.message.reply_text(f"Error checking budget status: {str(e)}")
-
-def format_weekly_budget_status(budget_status):
     """
-    Format the budget status into a weekly-focused, readable response.
-    Includes today's spending and remaining daily allowance.
+    Handle /help command.
     
     Args:
-        budget_status (dict): Dictionary containing budget information
-        
-    Returns:
-        str: Formatted response string
+        update (Update): The update object
+        context (ContextTypes.DEFAULT_TYPE): The context object
     """
-    if not budget_status.get("has_budget", False):
-        return "📊 **Weekly Budget Status**\n\nNo budgets found. Set a budget first with a command like 'Set ₱1000 weekly budget'."
-    
-    # Get week start day name
-    week_start_index = budget_status.get("week_start_index", 0)  # Default to Monday (0)
-    weekday_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-    week_start_day = weekday_names[week_start_index] if 0 <= week_start_index <= 6 else "Monday"
-    
-    # Create a well-formatted summary focused on the weekly view
-    response = f"📊 **Weekly Budget Status** (Weeks start on {week_start_day})\n\n"
-    
-    # Get today's date
-    today = datetime.date.today()
-    
-    # Format the status emoji
-    status_emoji = "✅"  # under_budget
-    if budget_status.get("status") == "over_budget":
-        status_emoji = "❌"
-    elif budget_status.get("status") == "near_limit":
-        status_emoji = "⚠️"
-    
-    # Weekly budget info
-    response += f"{status_emoji} **Weekly Budget:** ₱{budget_status.get('weekly_budget', 0):.2f}\n"
-    response += f"💰 **Spent so far:** ₱{budget_status['total_spent']:.2f} ({budget_status['percent_used']:.1f}%)\n"
-    response += f"🔢 **Remaining:** ₱{budget_status['remaining']:.2f}\n"
-    
-    # Week progress
-    days_elapsed = budget_status.get("days_elapsed", 0)
-    days_in_week = 7
-    response += f"⏳ **Week Progress:** {days_elapsed} of {days_in_week} days " + \
-               f"({(days_elapsed/days_in_week)*100:.1f}%)\n\n"
-    
-    # Get today's expenses
-    try:
-        # Use the existing expense_summary_service to get today's expenses
-        today_expenses_df = expense_summary_service.get_expenses_in_period(today, today)
-        today_total = today_expenses_df['Amount'].sum() if not today_expenses_df.empty else 0
-        
-        # Add today's spending info
-        response += f"📅 **Today's Spending:** ₱{today_total:.2f}\n"
-        
-        # Calculate remaining for today
-        daily_budget = budget_status.get('daily_budget', 0)
-        remaining_today = daily_budget - today_total
-        remaining_color = "surplus" if remaining_today >= 0 else "over budget"
-        response += f"📅 **Today's Budget:** ₱{daily_budget:.2f} " + \
-                   f"(₱{abs(remaining_today):.2f} {remaining_color})\n\n"
-    except Exception as e:
-        logger.error(f"Error calculating today's expenses: {str(e)}")
-        response += "📅 **Today's Spending:** Could not calculate\n\n"
-    
-    # Daily averages
-    response += "📅 **Daily Breakdown:**\n"
-    response += f"• Budget per day: ₱{budget_status['daily_budget']:.2f}\n"
-    response += f"• Average spent per day: ₱{budget_status['daily_average']:.2f}\n"
-    
-    if budget_status.get("days_remaining", 0) > 0:
-        response += f"• Remaining daily allowance: ₱{budget_status.get('remaining_daily_allowance', 0):.2f}\n\n"
-    else:
-        response += "\n"
-    
-    return response
-
-async def expense_template_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Shortcut command to show expense entry template."""
-    template_message = (
-        "📝 **Quick Expense Entry**\n\n"
-        "Reply with your expense in any of these formats:\n"
-        "• spent 500 on lunch\n"
-        "• 1200 for electricity bill yesterday\n"
-        "• 50 coffee\n\n"
-        "Or choose a template below:"
+    await update.message.reply_text(
+        ui.format_help_message(),
+        parse_mode='Markdown',
+        reply_markup=ui.get_main_keyboard()
     )
-    # Add keyboard with expense templates
-    keyboard = telegram_ui.get_expense_template_keyboard()
-    await update.message.reply_text(template_message, parse_mode='Markdown', reply_markup=keyboard)
 
-async def weekstart_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle the /weekstart command to set the week start day."""
-    user_id = update.effective_user.id
-    logger.info(f"Week start day setting requested by {user_id}")
+async def custom_budget_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Handle /cb command to set custom period budgets.
     
-    # Get current week start day
-    current_start_day = preference_service.get_week_start_day(user_id)
-    
-    # Map day index to day name
-    weekday_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-    current_day_name = weekday_names[current_start_day] if 0 <= current_start_day <= 6 else "Monday"
-    
-    # Create message with current setting
-    message = (
-        f"📅 **Week Start Day Settings**\n\n"
-        f"Your current week starts on: **{current_day_name}**\n\n"
-        f"Select a new start day for your week:"
+    Args:
+        update (Update): The update object
+        context (ContextTypes.DEFAULT_TYPE): The context object
+    """
+    await update.message.reply_text(
+        "📅 **Set a Custom Period Budget**\n\n"
+        "Select the number of days for your budget period:",
+        parse_mode='Markdown',
+        reply_markup=ui.get_custom_period_keyboard()
     )
     
-    # Add keyboard with day options
-    keyboard = telegram_ui.get_week_start_day_keyboard()
-    await update.message.reply_text(message, parse_mode='Markdown', reply_markup=keyboard)
+    return AWAITING_CUSTOM_DAYS
 
-# telegram_bot.py (fixed button callback function)
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Handle incoming messages.
+    
+    Args:
+        update (Update): The update object
+        context (ContextTypes.DEFAULT_TYPE): The context object
+    """
+    user_input = update.message.text
+    
+    if DEBUG:
+        logger.info(f"Received message: {user_input}")
+    
+    # Check if we're waiting for budget input
+    if context.user_data.get('awaiting_budget'):
+        return await handle_budget_input(update, context)
+    
+    # Check if we're waiting for custom budget days
+    if context.user_data.get('awaiting_custom_days'):
+        return await handle_custom_days_input(update, context)
+    
+    # Check if we're waiting for custom budget amount
+    if context.user_data.get('awaiting_custom_budget'):
+        return await handle_custom_budget_input(update, context)
+    
+    # Detect intent using AI
+    intent_data = ai_agent.detect_intent(user_input)
+    
+    if DEBUG:
+        logger.info(f"Detected intent: {intent_data}")
+    
+    # Process based on intent
+    if intent_data["intent"] == "expense":
+        result = expense_service.process_expense(user_input)
+        
+        if result["success"]:
+            # Check if we processed multiple expenses
+            if "multiple" in result["data"] and result["data"]["multiple"]:
+                await update.message.reply_text(
+                    f"✅ {result['message']}",
+                    reply_markup=ui.get_main_keyboard()
+                )
+            else:
+                # Single expense
+                await update.message.reply_text(
+                    ui.format_expense_confirmation(result["data"]),
+                    reply_markup=ui.get_main_keyboard()
+                )
+        else:
+            await update.message.reply_text(
+                f"❌ {result['message']}",
+                reply_markup=ui.get_main_keyboard()
+            )
+    
+    elif intent_data["intent"] == "summary":
+        await update.message.reply_text("Generating summary, please wait...")
+        
+        result = summary_service.generate_summary(user_input)
+        
+        if result["success"]:
+            await update.message.reply_text(
+                result["message"],
+                reply_markup=ui.get_main_keyboard()
+            )
+        else:
+            await update.message.reply_text(
+                f"❌ {result['message']}",
+                reply_markup=ui.get_main_keyboard()
+            )
+    
+    elif intent_data["intent"] == "budget_status":
+        await update.message.reply_text("Checking budget status, please wait...")
+        
+        result = budget_service.get_budget_status(user_input)
+        
+        if result["success"]:
+            await update.message.reply_text(
+                ui.format_budget_status(result["data"]),
+                reply_markup=ui.get_main_keyboard()
+            )
+        else:
+            await update.message.reply_text(
+                f"❌ {result['message']}",
+                reply_markup=ui.get_main_keyboard()
+            )
+    
+    elif intent_data["intent"] == "set_budget":
+        result = budget_service.set_budget(user_input)
+        
+        if result["success"]:
+            # Format message based on period type
+            budget_data = result["data"]
+            if budget_data.get("period") == "custom":
+                # Custom period budget confirmation
+                await update.message.reply_text(
+                    ui.format_custom_period_confirmation(budget_data),
+                    reply_markup=ui.get_main_keyboard()
+                )
+            else:
+                # Regular budget confirmation
+                await update.message.reply_text(
+                    ui.format_budget_confirmation(budget_data),
+                    reply_markup=ui.get_main_keyboard()
+                )
+        else:
+            await update.message.reply_text(
+                f"❌ {result['message']}",
+                reply_markup=ui.get_main_keyboard()
+            )
+    
+    elif intent_data["intent"] == "delete_expense":
+        result = expense_service.delete_expense(user_input)
+        
+        if result["success"]:
+            await update.message.reply_text(
+                f"✅ {result['message']}",
+                reply_markup=ui.get_main_keyboard()
+            )
+        else:
+            await update.message.reply_text(
+                f"❌ {result['message']}",
+                reply_markup=ui.get_main_keyboard()
+            )
+    
+    elif intent_data["intent"] == "help":
+        await update.message.reply_text(
+            ui.format_help_message(),
+            parse_mode='Markdown',
+            reply_markup=ui.get_main_keyboard()
+        )
+    
+    else:  # "other" or unrecognized intent
+        await update.message.reply_text(
+            "I'm not sure what you want to do. You can log an expense by typing something like 'coffee 3.50', "
+            "or use one of the options below:",
+            reply_markup=ui.get_main_keyboard()
+        )
 
-async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle button press from inline keyboards."""
+async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Handle button callbacks.
+    
+    Args:
+        update (Update): The update object
+        context (ContextTypes.DEFAULT_TYPE): The context object
+    """
     query = update.callback_query
-    user_id = update.effective_user.id
-    
-    # Always answer the callback query to stop the loading animation
     await query.answer()
     
-    logger.info(f"Button pressed by {user_id}: {query.data}")
+    callback_data = query.data
     
-    try:
-        # Handle different button callbacks
-        if query.data.startswith("summary_"):
-            # Handle "Weekly Summary" button by calling the /sum command function
-            if query.data == "summary_week":
-                # Get user's preferred week start day
-                week_start_index = preference_service.get_week_start_day(user_id)
-                
-                # Calculate the current week's start and end using the user's preference
-                today = datetime.date.today()
-                days_since_week_start = (today.weekday() - week_start_index) % 7
-                start_of_week = today - datetime.timedelta(days=days_since_week_start)
-                end_of_week = start_of_week + datetime.timedelta(days=6)
-                
-                # Get expenses for the current week based on user's preference
-                df = expense_summary_service.get_expenses_in_period(start_of_week, end_of_week)
-                
-                # Generate summary
-                summary = expense_summary_service.generate_summary(df)
-                
-                # Create period info with custom week start day
-                weekday_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-                week_start_day = weekday_names[week_start_index] if 0 <= week_start_index <= 6 else "Monday"
-                
-                period = {
-                    "start_date": start_of_week,
-                    "end_date": end_of_week,
-                    "period_name": f"This Week (Starting {week_start_day})"
-                }
-                
-                # Format the response
-                response = expense_summary_service.format_summary_response(summary, period)
-                
-                # Add detailed list of expenses if there are any
-                if not df.empty:
-                    # Sort by date (newest first)
-                    df_sorted = df.sort_values('Date', ascending=False)
-                    
-                    # Format the detailed list
-                    response += "\n\n**Detailed Expenses:**\n"
-                    
-                    for _, row in df_sorted.iterrows():
-                        date_str = row['Date'].strftime("%b %d") if hasattr(row['Date'], 'strftime') else str(row['Date'])
-                        amount = float(row['Amount'])
-                        description = row['Description']
-                        category = row['Category']
-                        response += f"• {date_str}: ₱{amount:.2f} - {description} ({category})\n"
-                
-                # Send the response using query.message instead of update.message
-                formatted_text, keyboard = telegram_ui.format_summary_response(response)
-                await query.message.reply_text(formatted_text, parse_mode='Markdown', reply_markup=keyboard)
-            else:
-                # Handle other summary requests
-                period = query.data.replace("summary_", "")
-                period_text = "this " + period
-                if period == "last_month":
-                    period_text = "last month"
-                    
-                _, response, _ = expense_summary_service.handle_expense_summary(f"Show my expenses {period_text}")
-                formatted_text, keyboard = telegram_ui.format_summary_response(response)
-                await query.message.reply_text(formatted_text, parse_mode='Markdown', reply_markup=keyboard)
-            
-        elif query.data == "today_expenses":
-            # Get today's expenses
-            today = datetime.date.today()
-            df = expense_summary_service.get_expenses_in_period(today, today)
-            
-            if df.empty:
-                response = "📅 **Today's Expenses**\n\nNo expenses recorded for today."
-            else:
-                # Format expenses in a readable way
-                total = df['Amount'].sum()
-                expense_list = []
-                
-                for _, row in df.iterrows():
-                    amount = float(row['Amount'])
-                    description = row['Description']
-                    category = row['Category']
-                    expense_list.append(f"• ₱{amount:.2f} - {description} ({category})")
-                
-                expenses_text = "\n".join(expense_list)
-                response = f"📅 **Today's Expenses**\n\n{expenses_text}\n\n**Total:** ₱{total:.2f}"
-            
-            # Use summary keyboard for follow-up options
-            _, keyboard = telegram_ui.format_summary_response(response)
-            await query.message.reply_text(response, parse_mode='Markdown', reply_markup=keyboard)
-            
-        elif query.data == "check_budget":
-            # Budget status check with weekly focus
-            today = datetime.date.today()
-            
-            # Get user's preferred week start day
-            week_start_index = preference_service.get_week_start_day(user_id)
-            
-            # Calculate the current week's start and end using the user's preference
-            days_since_week_start = (today.weekday() - week_start_index) % 7
-            start_of_week = today - datetime.timedelta(days=days_since_week_start)
-            end_of_week = start_of_week + datetime.timedelta(days=6)
-            
-            # Get budget status using the week dates and week start preference
-            budget_status = budget_service.get_budget_status(start_of_week, end_of_week, week_start_index=week_start_index)
-            
-            # Get today's expenses for the daily budget update
-            today_expenses_df = expense_summary_service.get_expenses_in_period(today, today)
-            today_total = today_expenses_df['Amount'].sum() if not today_expenses_df.empty else 0
-            
-            # Add today's spending to the budget_status
-            budget_status["today_spent"] = today_total
-            
-            # Format with weekly focus
-            response = budget_service.format_weekly_budget_status_response(budget_status)
-            
-            # Use the budget keyboard for response
-            formatted_text, keyboard = telegram_ui.format_budget_response(response)
-            await query.message.reply_text(formatted_text, parse_mode='Markdown', reply_markup=keyboard)
-            
-        elif query.data.startswith("set_") and "budget" in query.data:
-            # Budget setting template
-            period = "monthly"
-            if "weekly" in query.data:
-                period = "weekly"
-                
-            template_message = f"To set a {period} budget, reply with an amount like:\n\n" + \
-                               f"\"Set ₱5000 {period} budget\"\n\n" + \
-                               f"Or for a specific category:\n\n" + \
-                               f"\"Set ₱1000 {period} budget for Food\""
-                               
-            await query.message.reply_text(template_message)
-            
-        elif query.data == "add_expense":
-            # Expense template
-            template_message = (
-                "📝 **Quick Expense Entry**\n\n"
-                "Reply with your expense in any of these formats:\n"
-                "• spent 500 on lunch\n"
-                "• 1200 for electricity bill yesterday\n"
-                "• 50 coffee\n\n"
-                "Or choose a template below:"
+    if DEBUG:
+        logger.info(f"Button pressed: {callback_data}")
+    
+    # Main menu options
+    if callback_data == "main_menu":
+        await query.edit_message_text(
+            "Please select an option:",
+            reply_markup=ui.get_main_keyboard()
+        )
+    
+    elif callback_data == "summary":
+        await query.edit_message_text(
+            "Select a time period for your summary:",
+            reply_markup=ui.get_summary_keyboard()
+        )
+    
+    elif callback_data == "budget":
+        await query.edit_message_text(
+            "Budget options:",
+            reply_markup=ui.get_budget_keyboard()
+        )
+    
+    elif callback_data == "delete_expense":
+        await query.edit_message_text(
+            "To delete an expense, please type a message like:\n\n"
+            "`delete coffee expense`\n"
+            "`remove taxi payment`",
+            parse_mode='Markdown',
+            reply_markup=ui.get_main_keyboard()
+        )
+    
+    elif callback_data == "help":
+        await query.edit_message_text(
+            ui.format_help_message(),
+            parse_mode='Markdown',
+            reply_markup=ui.get_main_keyboard()
+        )
+    
+    # Summary options
+    elif callback_data.startswith("summary_"):
+        period = callback_data.replace("summary_", "")
+        
+        await query.edit_message_text("Generating summary, please wait...")
+        
+        # Generate summary based on selected period
+        result = summary_service.generate_summary(f"Summary for {period}")
+        
+        if result["success"]:
+            await query.edit_message_text(
+                result["message"],
+                reply_markup=ui.get_main_keyboard()
             )
-            # Add keyboard with expense templates
-            keyboard = telegram_ui.get_expense_template_keyboard()
-            await query.message.reply_text(template_message, parse_mode='Markdown', reply_markup=keyboard)
-            
-        elif query.data == "list_categories":
-            # List categories
-            categories = category_service.get_categories()
-            if not categories:
-                await query.message.reply_text("No categories found.")
-                return
-                
-            categories_list = "\n".join([f"• {category}" for category in categories])
-            await query.message.reply_text(f"📋 **Available categories:**\n{categories_list}", parse_mode='Markdown')
-            
-        elif query.data.startswith("template_"):
-            # Send expense template
-            template_type = query.data.replace("template_", "")
-            template_text = telegram_ui.get_template_text(template_type)
-            await query.message.reply_text(f"_Complete this expense:_\n\n`{template_text}`", parse_mode='Markdown')
-            
-        elif query.data.startswith("weekstart_"):
-            # Handle week start day setting
-            action = query.data.replace("weekstart_", "")
-            
-            if action == "cancel":
-                await query.message.reply_text("Week start day change cancelled.")
-                return
-                
-            try:
-                # Convert to day index
-                day_index = int(action)
-                
-                if 0 <= day_index <= 6:
-                    # Save preference
-                    success = preference_service.set_week_start_day(user_id, day_index)
-                    
-                    # Map day index to day name
-                    weekday_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-                    day_name = weekday_names[day_index]
-                    
-                    if success:
-                        await query.message.reply_text(f"✅ Week start day set to **{day_name}**. Your weekly summaries and budgets will now use this setting.", parse_mode='Markdown')
-                    else:
-                        await query.message.reply_text(f"❌ Failed to set week start day. Please try again.")
-                else:
-                    await query.message.reply_text(f"❌ Invalid day selected. Please try again.")
-            except ValueError:
-                await query.message.reply_text(f"❌ Invalid selection. Please try again.")
-            
-    except Exception as e:
-        logger.error(f"Error handling button callback: {str(e)}")
-        await query.message.reply_text(f"Error processing your request: {str(e)}")
-
-# Message handler
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Process user messages using the improved detect_intent function."""
-    user_input = update.message.text
-    user_id = update.effective_user.id
-    logger.info(f"Received message from {user_id}: {user_input}")
-    
-    try:
-        # Use the improved detect_intent function to determine the user's intent
-        intent_data = openai_service.detect_intent(user_input)
-        intent = intent_data.get("intent", "expense")  # Default to expense if not specified
-        
-        logger.info(f"Detected intent: {intent}")
-        
-        # Process based on the detected intent
-        if intent == "expense":
-            # Process as expense entry
-            response = expense_service.handle_multiple_expenses(user_input)
-            formatted_text, keyboard = telegram_ui.format_expense_response(response)
-            await update.message.reply_text(formatted_text, parse_mode='Markdown', reply_markup=keyboard)
-            
-        elif intent == "summary":
-            # Handle expense summary request
-            _, response, _ = expense_summary_service.handle_expense_summary(user_input)
-            formatted_text, keyboard = telegram_ui.format_summary_response(response)
-            await update.message.reply_text(formatted_text, parse_mode='Markdown', reply_markup=keyboard)
-            
-        elif intent == "budget_status" or intent == "set_budget":
-            # Handle budget-related request
-            try:
-                budget_data = openai_service.extract_budget_details(user_input)
-                
-                # Check if this is setting a budget or checking status
-                if intent == "set_budget" or "set" in user_input.lower() or "create" in user_input.lower():
-                    # Set budget
-                    budget_service.set_budget(budget_data["amount"], budget_data["period"], budget_data["category"])
-                    
-                    # Format category for display
-                    category_display = "overall spending"
-                    if budget_data["category"] != "Total":
-                        category_display = f"the {budget_data['category']} category"
-                    
-                    # Enhanced budget confirmation
-                    response = (
-                        f"✅ Got it! I've set a {budget_data['period'].lower()} budget of "
-                        f"₱{budget_data['amount']:.2f} for {category_display}. "
-                        f"I'll track your spending against this budget."
-                    )
-                else:
-                    # Check budget status with weekly focus
-                    today = datetime.date.today()
-                    
-                    # Get user's preferred week start day
-                    week_start_index = preference_service.get_week_start_day(user_id)
-                    
-                    # Calculate the current week's start and end using the user's preference
-                    days_since_week_start = (today.weekday() - week_start_index) % 7
-                    start_of_week = today - datetime.timedelta(days=days_since_week_start)
-                    end_of_week = start_of_week + datetime.timedelta(days=6)
-                    
-                    # Get budget status using the week dates and week start preference
-                    budget_status = budget_service.get_budget_status(start_of_week, end_of_week, week_start_index=week_start_index)
-                    
-                    # Get today's expenses for the daily budget update
-                    today_expenses_df = expense_summary_service.get_expenses_in_period(today, today)
-                    today_total = today_expenses_df['Amount'].sum() if not today_expenses_df.empty else 0
-                    
-                    # Add today's spending to the budget_status
-                    budget_status["today_spent"] = today_total
-                    
-                    # Format with weekly focus
-                    response = budget_service.format_weekly_budget_status_response(budget_status)
-                
-                formatted_text, keyboard = telegram_ui.format_budget_response(response)
-                await update.message.reply_text(formatted_text, parse_mode='Markdown', reply_markup=keyboard)
-            except Exception as e:
-                logger.error(f"Error processing budget request: {str(e)}")
-                await update.message.reply_text(f"Error processing budget request: {str(e)}")
-                
-        elif intent == "help":
-            # Show help message
-            await help_command(update, context)
-            
         else:
-            # For any other intent or if unsure, default to processing as an expense
-            response = expense_service.handle_multiple_expenses(user_input)
-            formatted_text, keyboard = telegram_ui.format_expense_response(response)
-            await update.message.reply_text(formatted_text, parse_mode='Markdown', reply_markup=keyboard)
-            
-    except Exception as e:
-        logger.error(f"Error processing message: {str(e)}")
-        await update.message.reply_text("I encountered an error processing your request. Please try again.")
+            await query.edit_message_text(
+                f"❌ {result['message']}",
+                reply_markup=ui.get_main_keyboard()
+            )
+    
+    # Budget options
+    elif callback_data == "budget_status":
+        await query.edit_message_text("Checking budget status, please wait...")
+        
+        result = budget_service.get_budget_status()
+        
+        if result["success"]:
+            await query.edit_message_text(
+                ui.format_budget_status(result["data"]),
+                reply_markup=ui.get_main_keyboard()
+            )
+        else:
+            await query.edit_message_text(
+                f"❌ {result['message']}",
+                reply_markup=ui.get_main_keyboard()
+            )
+    
+    # Custom period budget options
+    elif callback_data == "set_custom_budget":
+        await query.edit_message_text(
+            "📅 **Set a Custom Period Budget**\n\n"
+            "Select the number of days for your budget period:",
+            parse_mode='Markdown',
+            reply_markup=ui.get_custom_period_keyboard()
+        )
+        
+        return AWAITING_CUSTOM_DAYS
+    
+    elif callback_data.startswith("set_custom_budget_"):
+        # Extract days from callback data
+        days = callback_data.replace("set_custom_budget_", "")
+        
+        # Store the days in user data
+        context.user_data['custom_budget_days'] = int(days)
+        context.user_data['awaiting_custom_budget'] = True
+        
+        await query.edit_message_text(
+            f"Please enter the amount for your {days}-day budget:\n"
+            f"(e.g., 1000 for overall budget or 200 food for category budget)",
+            reply_markup=None
+        )
+        
+        return AWAITING_CUSTOM_BUDGET
+    
+    elif callback_data.startswith("set_"):
+        # Extract period from callback data
+        period = callback_data.replace("set_", "").replace("_budget", "")
+        
+        # Store the period in user data
+        context.user_data['awaiting_budget'] = True
+        context.user_data['budget_period'] = period
+        
+        await query.edit_message_text(
+            f"Please enter the amount for your {period} budget:\n"
+            f"(e.g., 1000 for overall budget or 200 food for category budget)",
+            reply_markup=None
+        )
+        
+        return AWAITING_BUDGET_AMOUNT
 
-async def handle_category_spending_query(update: Update, category: str, period: str):
+async def handle_budget_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    Handle queries about spending on specific categories.
+    Handle budget amount input.
     
     Args:
-        update: The Telegram update
-        category: Category to check spending for
-        period: Time period to check (today, this week, etc.)
+        update (Update): The update object
+        context (ContextTypes.DEFAULT_TYPE): The context object
     """
+    user_input = update.message.text
+    period = context.user_data.get('budget_period', 'monthly')
+    
+    # Reset the awaiting flag
+    context.user_data['awaiting_budget'] = False
+    
+    # Process the budget setting
+    modified_input = f"set {period} budget {user_input}"
+    result = budget_service.set_budget(modified_input)
+    
+    if result["success"]:
+        await update.message.reply_text(
+            ui.format_budget_confirmation(result["data"]),
+            reply_markup=ui.get_main_keyboard()
+        )
+    else:
+        await update.message.reply_text(
+            f"❌ {result['message']}",
+            reply_markup=ui.get_main_keyboard()
+        )
+    
+    return ConversationHandler.END
+
+async def handle_custom_days_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Handle custom period days input.
+    
+    Args:
+        update (Update): The update object
+        context (ContextTypes.DEFAULT_TYPE): The context object
+    """
+    user_input = update.message.text
+    
     try:
-        user_id = update.effective_user.id
+        # Try to parse the days as an integer
+        days = int(user_input)
         
-        # Validate category exists in our system
-        available_categories = category_service.get_categories()
-        if category not in available_categories:
-            # Try to find the closest match
-            category_lower = category.lower()
-            for avail_category in available_categories:
-                if category_lower in avail_category.lower() or avail_category.lower() in category_lower:
-                    category = avail_category
-                    break
-            else:  # No match found
-                await update.message.reply_text(f"I couldn't find the '{category}' category. Available categories are: {', '.join(available_categories)}")
-                return
-                
-        # Parse the time period
-        period_data = expense_summary_service.parse_time_period(period)
-        start_date = period_data["start_date"]
-        end_date = period_data["end_date"]
+        if days < 1 or days > 365:
+            await update.message.reply_text(
+                "Please enter a valid number of days between 1 and 365.",
+                reply_markup=ui.get_main_keyboard()
+            )
+            return AWAITING_CUSTOM_DAYS
         
-        # Get category spending data
-        spending_data = budget_service.get_category_spending(start_date, end_date, category)
+        # Store the days and update state
+        context.user_data['custom_budget_days'] = days
+        context.user_data['awaiting_custom_days'] = False
+        context.user_data['awaiting_custom_budget'] = True
         
-        # Format the response
-        response = budget_service.format_category_spending_response(spending_data)
+        await update.message.reply_text(
+            f"Please enter the amount for your {days}-day budget:\n"
+            f"(e.g., 1000 for overall budget or 200 food for category budget)"
+        )
         
-        # Use category spending keyboard for follow-up actions
-        formatted_text, keyboard = telegram_ui.format_summary_response(response)
-        await update.message.reply_text(formatted_text, parse_mode='Markdown', reply_markup=keyboard)
+        return AWAITING_CUSTOM_BUDGET
         
+    except ValueError:
+        await update.message.reply_text(
+            "Please enter a valid number of days.",
+            reply_markup=ui.get_main_keyboard()
+        )
+        return AWAITING_CUSTOM_DAYS
+
+async def handle_custom_budget_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Handle custom budget amount input with direct budget data construction.
+    
+    Args:
+        update (Update): The update object
+        context (ContextTypes.DEFAULT_TYPE): The context object
+    """
+    user_input = update.message.text
+    days = context.user_data.get('custom_budget_days', 30)  # Default to 30 if not set
+    
+    # Reset the awaiting flag
+    context.user_data['awaiting_custom_budget'] = False
+    
+    try:
+        # Parse the input to extract amount and optional category
+        amount = 0
+        category = "all"
+        
+        # Simple parsing logic - first number is the amount
+        parts = user_input.split()
+        for part in parts:
+            try:
+                amount = float(part.replace(',', ''))
+                break  # Take the first valid number as amount
+            except ValueError:
+                continue
+        
+        # Check if a category is mentioned
+        categories = budget_service.sheets.get_categories()
+        for cat in categories:
+            if cat.lower() in user_input.lower():
+                category = cat
+                break
+        
+        # Create a budget data dictionary directly instead of parsing through AI
+        today = datetime.datetime.now().strftime("%Y-%m-%d")
+        budget_data = {
+            "amount": amount,
+            "period": "custom",
+            "days": days,
+            "category": category,
+            "start_date": today
+        }
+        
+        # Set the budget using the budget service
+        result = budget_service.set_budget(budget_data)
+        
+        if result["success"]:
+            # Format for display
+            await update.message.reply_text(
+                ui.format_custom_period_confirmation(result["data"]),
+                reply_markup=ui.get_main_keyboard()
+            )
+        else:
+            await update.message.reply_text(
+                f"❌ {result['message']}",
+                reply_markup=ui.get_main_keyboard()
+            )
     except Exception as e:
-        logger.error(f"Error handling category spending query: {str(e)}")
-        await update.message.reply_text(f"I encountered an error processing your category spending query: {str(e)}")
+        logger.error(f"Error setting custom budget: {str(e)}")
+        traceback.print_exc()
+        await update.message.reply_text(
+            f"❌ Error setting budget: {str(e)}",
+            reply_markup=ui.get_main_keyboard()
+        )
+    
+    # Clean up user data
+    if 'custom_budget_days' in context.user_data:
+        del context.user_data['custom_budget_days']
+    
+    return ConversationHandler.END
+
+async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Log errors and send a message to the user.
+    
+    Args:
+        update (Update): The update object
+        context (ContextTypes.DEFAULT_TYPE): The context object
+    """
+    logger.error(msg="Exception while handling an update:", exc_info=context.error)
+    traceback.print_exc()
+    
+    # Send a message to the user
+    error_message = "Sorry, something went wrong. Please try again later."
+    
+    if update.effective_message:
+        await update.effective_message.reply_text(error_message)
 
 def main():
-    """Initialize and start the bot."""
-    # Start the HTTP server in a separate thread
-    http_thread = threading.Thread(target=start_http_server, daemon=True)
-    http_thread.start()
-    logger.info("HTTP server thread started")
-    
+    """Start the bot."""
     # Create the Application
-    application = Application.builder().token(TELEGRAM_TOKEN).build()
+    application = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
+    # Add conversation handler for budget setting
+    conv_handler = ConversationHandler(
+        entry_points=[
+            CallbackQueryHandler(button_handler, pattern=r"^set_")
+        ],
+        states={
+            AWAITING_BUDGET_AMOUNT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_budget_input)
+            ],
+            AWAITING_CUSTOM_DAYS: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_custom_days_input),
+                CallbackQueryHandler(button_handler, pattern=r"^set_custom_budget_\d+$")
+            ],
+            AWAITING_CUSTOM_BUDGET: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_custom_budget_input)
+            ],
+        },
+        fallbacks=[CommandHandler("cancel", start)],
+        name="budget_conversation",
+        persistent=False,
+    )
+    
+    # Add custom budget command handler
+    custom_budget_handler = ConversationHandler(
+        entry_points=[CommandHandler("cb", custom_budget_command)],
+        states={
+            AWAITING_CUSTOM_DAYS: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_custom_days_input),
+                CallbackQueryHandler(button_handler, pattern=r"^set_custom_budget_\d+$")
+            ],
+            AWAITING_CUSTOM_BUDGET: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_custom_budget_input)
+            ],
+        },
+        fallbacks=[CommandHandler("cancel", start)],
+        name="custom_budget_conversation",
+        persistent=False,
+    )
+    
     # Add command handlers
-    application.add_handler(CommandHandler("start", start_command))
+    application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(CommandHandler("categories", categories_command))
     
-    # Add shortcut command handlers
-    application.add_handler(CommandHandler("sum", summary_shortcut_command))
-    application.add_handler(CommandHandler("b", budget_shortcut_command))
-    application.add_handler(CommandHandler("e", expense_template_command))
-    application.add_handler(CommandHandler("weekstart", weekstart_command))
+    # Add conversation handlers
+    application.add_handler(custom_budget_handler)
+    application.add_handler(conv_handler)
     
-    # Add callback query handler for inline keyboards
-    application.add_handler(CallbackQueryHandler(button_callback))
+    # Add regular button handler (for buttons not in the conversation)
+    application.add_handler(CallbackQueryHandler(button_handler))
     
     # Add message handler
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    
+    # Add error handler
+    application.add_error_handler(error_handler)
+    
+    # Set up webhook if in production
+    webhook_url = os.environ.get("WEBHOOK_URL")
+    webhook_port = int(os.environ.get("PORT", 8443))
+    
+    if webhook_url:
+        application.run_webhook(
+            listen="0.0.0.0",
+            port=webhook_port,
+            url_path=TELEGRAM_TOKEN,
+            webhook_url=f"{webhook_url}/{TELEGRAM_TOKEN}"
+        )
+    else:
+        # Start the Bot in polling mode
+        application.run_polling()
 
-    # Run the bot until the user presses Ctrl-C
-    logger.info("Starting bot...")
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
-
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
