@@ -585,6 +585,74 @@ async def handle_custom_budget_input(update: Update, context: ContextTypes.DEFAU
     
     return ConversationHandler.END
 
+async def utang_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Handle /utang command to show expenses paid for others.
+    
+    Args:
+        update (Update): The update object
+        context (ContextTypes.DEFAULT_TYPE): The context object
+    """
+    # Get paid for expenses from sheets
+    try:
+        # Tell user we're processing
+        await update.message.reply_text("Fetching utang (money owed to you)...")
+        
+        # Get the expenses from sheets service
+        paid_for_expenses = expense_service.sheets.get_paid_for_expenses()
+        
+        if not paid_for_expenses:
+            await update.message.reply_text(
+                "No one owes you money right now! 🎉",
+                reply_markup=ui.get_main_keyboard()
+            )
+            return
+        
+        # Group expenses by person
+        person_debts = {}
+        for expense in paid_for_expenses:
+            person = expense.get('Paid For Person', 'Unknown')
+            amount = float(expense.get('Amount', 0))
+            
+            if person in person_debts:
+                person_debts[person]['total'] += amount
+                person_debts[person]['expenses'].append(expense)
+            else:
+                person_debts[person] = {
+                    'total': amount,
+                    'expenses': [expense]
+                }
+        
+        # Generate the message
+        message = "📊 *Money Owed to You*\n\n"
+        
+        for person, data in person_debts.items():
+            message += f"*{person} owes you:* ₱{data['total']:.2f}\n"
+            
+            # Add expense details
+            for exp in data['expenses']:
+                message += f"  • ₱{float(exp.get('Amount', 0)):.2f} for {exp.get('Description', 'expense')}\n"
+            
+            message += "\n"
+        
+        # Add total
+        total_owed = sum(data['total'] for data in person_debts.values())
+        message += f"*Total money owed to you:* ₱{total_owed:.2f}"
+        
+        await update.message.reply_text(
+            message,
+            parse_mode='Markdown',
+            reply_markup=ui.get_main_keyboard()
+        )
+        
+    except Exception as e:
+        logger.error(f"Error fetching utang: {str(e)}")
+        traceback.print_exc()
+        await update.message.reply_text(
+            f"Error fetching utang: {str(e)}",
+            reply_markup=ui.get_main_keyboard()
+        )
+
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Log errors and send a message to the user.
@@ -631,6 +699,7 @@ def main():
     # Add command handlers
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
+    application.add_handler(CommandHandler("utang", utang_command))  # Add the utang command handler
     
     # Add conversation handler for custom budget
     application.add_handler(custom_budget_handler)

@@ -105,9 +105,106 @@ class SheetsService:
                 preferences_sheet.append_row(["UserID", "Setting", "Value"])
                 print(f"Created {PREFERENCES_SHEET} worksheet")
                 
+            # Check and create Paid For sheet
+            if "Paid For" not in worksheet_titles:
+                self.spreadsheet.add_worksheet(title="Paid For", rows=500, cols=10)
+                paid_for_sheet = self.spreadsheet.worksheet("Paid For")
+                paid_for_sheet.append_row(["Date", "Description", "Amount", "Category", "Paid For Person", "Status"])
+                print(f"Created Paid For worksheet")
+                
         except Exception as e:
             print(f"Error ensuring sheets exist: {str(e)}")
             traceback.print_exc()
+
+    def log_paid_for_expense(self, expense_data):
+        """
+        Log a 'paid for' expense to Google Sheets.
+        
+        Args:
+            expense_data (dict): Dictionary containing expense details
+                Required keys: date, description, amount, category, paid_for
+        
+        Returns:
+            bool: True if successful
+        """
+        try:
+            if DEBUG:
+                print(f"Logging 'paid for' expense to Google Sheets: {expense_data}")
+            
+            # Select the "Paid For" worksheet
+            worksheet = self.spreadsheet.worksheet("Paid For")
+            
+            # Prepare the row to append
+            row = [
+                expense_data["date"],
+                expense_data["description"],
+                expense_data["amount"],
+                expense_data["category"],
+                expense_data["paid_for"],
+                "Unpaid"  # Default status
+            ]
+            
+            # Append the row
+            worksheet.append_row(row)
+            
+            if DEBUG:
+                print("Successfully logged 'paid for' expense to Google Sheets")
+            
+            return True
+            
+        except Exception as e:
+            print(f"Error logging 'paid for' expense to Google Sheets: {str(e)}")
+            traceback.print_exc()
+            raise Exception(f"Error logging 'paid for' expense to Google Sheets: {str(e)}")
+
+    def get_paid_for_expenses(self, person=None):
+        """
+        Retrieve all 'paid for' expenses, optionally filtered by person name.
+        
+        Args:
+            person (str, optional): Person name to filter by
+        
+        Returns:
+            list: List of 'paid for' expense dictionaries
+        """
+        try:
+            # Select the "Paid For" worksheet
+            worksheet = self.spreadsheet.worksheet("Paid For")
+            
+            # Get all values including headers
+            all_values = worksheet.get_all_values()
+            
+            # Check if there's data (should be at least headers)
+            if len(all_values) <= 1:
+                return []
+                
+            # Extract headers and data
+            headers = all_values[0]
+            data = all_values[1:]
+            
+            # Convert to list of dictionaries
+            expenses = []
+            for row in data:
+                # Make sure we have complete rows
+                if len(row) < len(headers):
+                    continue
+                    
+                expense = dict(zip(headers, row))
+                
+                # Only include unpaid items
+                if expense.get('Status', '') == 'Unpaid':
+                    expenses.append(expense)
+            
+            # Filter by person if provided
+            if person:
+                expenses = [exp for exp in expenses if exp.get('Paid For Person', '').lower() == person.lower()]
+                
+            return expenses
+            
+        except Exception as e:
+            print(f"Error retrieving 'paid for' expenses: {str(e)}")
+            traceback.print_exc()
+            return []
     
     # Expense Methods
     def log_expense(self, expense_data):

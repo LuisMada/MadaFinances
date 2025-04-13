@@ -99,6 +99,7 @@ class AIAgent:
         """
         Extract structured expense data from user input.
         Supports parsing multiple expenses from a single message.
+        Detects 'paid for' information in parentheses.
         
         Args:
             user_input (str): Natural language input from the user
@@ -115,13 +116,14 @@ class AIAgent:
                 messages=[
                     {
                         "role": "system", 
-                        "content": "You are a financial assistant that extracts expense information from user messages. You can identify multiple expenses in a single message."
+                        "content": "You are a financial assistant that extracts expense information from user messages. You can identify multiple expenses in a single message and detect if an expense was paid for someone else."
                     },
                     {
                         "role": "user", 
                         "content": f"""Extract expense information from: '{user_input}'
                         
                         IMPORTANT: Check if the message contains multiple expenses (like "25 food, 50 haircut").
+                        Also check if the expense was paid for someone else, indicated by a name in parentheses.
                         
                         If there is only ONE expense, return a JSON object with these fields:
                         - "date": in YYYY-MM-DD format (default to today: {today} if not specified)
@@ -129,6 +131,7 @@ class AIAgent:
                         - "amount": the monetary amount as a number (no currency symbols)
                         - "category": the best matching category from this list: {', '.join(categories)}
                         - "multiple": false
+                        - "paid_for": if there's a name in parentheses like "(John)" then extract the name, otherwise null
                         
                         If there are MULTIPLE expenses (separated by commas, 'and', or similar), return a JSON with:
                         - "multiple": true
@@ -139,14 +142,16 @@ class AIAgent:
                         2. If amount appears to be numeric with a currency symbol, just extract the number
                         3. Choose the most appropriate category based on the description
                         4. For ambiguous dates, prefer standard formats and reasonable assumptions
+                        5. If the description has text in parentheses like "(John)", extract "John" as the paid_for field
+                        and remove the parenthetical text from the description
                         
                         Examples of single expenses:
-                        - "coffee 5.50" -> {{date: today, description: "Coffee", amount: 5.50, category: "Food", multiple: false}}
-                        - "uber 25.75 tuesday" -> {{date: (Tuesday's date), description: "Uber ride", amount: 25.75, category: "Transportation", multiple: false}}
+                        - "coffee 5.50" -> {{date: today, description: "Coffee", amount: 5.50, category: "Food", multiple: false, paid_for: null}}
+                        - "uber 25.75 (John)" -> {{date: today, description: "Uber ride", amount: 25.75, category: "Transportation", multiple: false, paid_for: "John"}}
                         
                         Examples of multiple expenses:
-                        - "25 food, 50 haircut" -> {{multiple: true, expenses: [{{date: today, description: "Food", amount: 25, category: "Food"}}, {{date: today, description: "Haircut", amount: 50, category: "Other"}}]}}
-                        - "coffee 5.50 and lunch 12" -> {{multiple: true, expenses: [{{date: today, description: "Coffee", amount: 5.50, category: "Food"}}, {{date: today, description: "Lunch", amount: 12, category: "Food"}}]}}
+                        - "25 food, 50 haircut (Mary)" -> {{multiple: true, expenses: [{{date: today, description: "Food", amount: 25, category: "Food", paid_for: null}}, {{date: today, description: "Haircut", amount: 50, category: "Other", paid_for: "Mary"}}]}}
+                        - "coffee 5.50 (Bob) and lunch 12" -> {{multiple: true, expenses: [{{date: today, description: "Coffee", amount: 5.50, category: "Food", paid_for: "Bob"}}, {{date: today, description: "Lunch", amount: 12, category: "Food", paid_for: null}}]}}
                         """
                     }
                 ],
@@ -191,6 +196,19 @@ class AIAgent:
                     print(f"Parsed single expense: {parsed_data}")
                 
                 return parsed_data
+            
+        except Exception as e:
+            print(f"Error parsing expense: {str(e)}")
+            # Return default structure for error handling
+            return {
+                "date": today,
+                "description": user_input,
+                "amount": 0,
+                "category": "Other",
+                "source": "telegram",
+                "paid_for": None,
+                "error": str(e)
+            }
             
         except Exception as e:
             print(f"Error parsing expense: {str(e)}")
