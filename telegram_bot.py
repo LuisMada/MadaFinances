@@ -2,6 +2,7 @@
 Financial Tracker Bot
 Main entry point for the Telegram bot.
 """
+import threading
 import logging
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from telegram import Update
@@ -678,40 +679,8 @@ def main():
     """Start the bot with simplified functionality but with custom budget handler."""
     # Create the Application
     application = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-
-    # Add custom budget command handler
-    custom_budget_handler = ConversationHandler(
-        entry_points=[CommandHandler("cb", custom_budget_command)],
-        states={
-            AWAITING_CUSTOM_DAYS: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_custom_days_input),
-                CallbackQueryHandler(button_handler, pattern=r"^set_custom_budget_\d+$")
-            ],
-            AWAITING_CUSTOM_BUDGET: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_custom_budget_input)
-            ],
-        },
-        fallbacks=[CommandHandler("cancel", start)],
-        name="custom_budget_conversation",
-        persistent=False,
-    )
-
-    # Add command handlers
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(CommandHandler("utang", utang_command))  # Add the utang command handler
     
-    # Add conversation handler for custom budget
-    application.add_handler(custom_budget_handler)
-    
-    # Add regular button handler
-    application.add_handler(CallbackQueryHandler(button_handler))
-    
-    # Add message handler
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    
-    # Add error handler
-    application.add_error_handler(error_handler)
+    # Add handlers...
     
     # Set up webhook if in production
     webhook_url = os.environ.get("WEBHOOK_URL")
@@ -725,6 +694,14 @@ def main():
             webhook_url=f"{webhook_url}/{TELEGRAM_TOKEN}"
         )
     else:
+        # Start a simple HTTP server in a separate thread
+        server_port = int(os.environ.get("PORT", 8080))
+        server = HTTPServer(('0.0.0.0', server_port), SimpleHTTPRequestHandler)
+        server_thread = threading.Thread(target=server.serve_forever)
+        server_thread.daemon = True
+        server_thread.start()
+        print(f"Started HTTP server on port {server_port}")
+        
         # Start the Bot in polling mode
         application.run_polling()
 
