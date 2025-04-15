@@ -29,7 +29,7 @@ EXPENSES_SHEET = "Expenses"
 CATEGORIES_SHEET = "Categories"
 BUDGETS_SHEET = "Budgets"
 PREFERENCES_SHEET = "Preferences"
-PAID_FOR_SHEET = "Paid For"  # New sheet for tracking paid for expenses
+DEBTS_SHEET = "Debts"  # New sheet for debt tracking
 
 # Debug mode
 DEBUG = os.getenv('DEBUG', 'False').lower() == 'true'

@@ -16,7 +16,8 @@ from config import (
     CATEGORIES_SHEET,
     BUDGETS_SHEET,
     PREFERENCES_SHEET,
-    DEBUG
+    DEBUG,
+    DEBTS_SHEET
 )
 
 import ssl
@@ -66,337 +67,6 @@ class SheetsService:
             traceback.print_exc()
             raise Exception(f"Failed to authenticate with Google Sheets: {str(e)}")
     
-    def log_shared_expense(self, expense_data):
-        """
-        Log a shared expense to Google Sheets.
-        
-        Args:
-            expense_data (dict): Dictionary containing expense details
-                Required keys: date, description, amount, category, person, direction
-        
-        Returns:
-            bool: True if successful
-        """
-        try:
-            if DEBUG:
-                print(f"Logging shared expense to Google Sheets: {expense_data}")
-            
-            # Select the "Shared Expenses" worksheet
-            worksheet = self.spreadsheet.worksheet("Shared Expenses")
-            
-            # Prepare the row to append
-            row = [
-                expense_data["date"],
-                expense_data["description"],
-                expense_data["amount"],
-                expense_data["category"],
-                expense_data["person"],
-                expense_data["direction"],
-                "Unpaid",  # Default status
-                ""  # Empty settled date
-            ]
-            
-            # Append the row
-            worksheet.append_row(row)
-            
-            if DEBUG:
-                print("Successfully logged shared expense to Google Sheets")
-            
-            return True
-            
-        except Exception as e:
-            print(f"Error logging shared expense to Google Sheets: {str(e)}")
-            traceback.print_exc()
-            raise Exception(f"Error logging shared expense to Google Sheets: {str(e)}")
-
-    def get_shared_expenses(self, direction=None, person=None, status="Unpaid"):
-        """
-        Retrieve shared expenses, optionally filtered by direction, person name, and status.
-        
-        Args:
-            direction (str, optional): Filter by 'they_owe_me' or 'i_owe_them'
-            person (str, optional): Person name to filter by
-            status (str, optional): Filter by status ('Unpaid', 'Partial', 'Settled')
-        
-        Returns:
-            list: List of shared expense dictionaries
-        """
-        try:
-            # Select the "Shared Expenses" worksheet
-            worksheet = self.spreadsheet.worksheet("Shared Expenses")
-            
-            # Get all values including headers
-            all_values = worksheet.get_all_values()
-            
-            # Check if there's data (should be at least headers)
-            if len(all_values) <= 1:
-                return []
-                
-            # Extract headers and data
-            headers = all_values[0]
-            data = all_values[1:]
-            
-            if DEBUG:
-                print(f"Shared expenses headers: {headers}")
-                print(f"First row data: {data[0] if data else 'No data'}")
-            
-            # Convert to list of dictionaries with case-insensitive access
-            expenses = []
-            for row in data:
-                # Make sure we have complete rows
-                if len(row) < len(headers):
-                    # Add empty values for missing columns
-                    row = row + [""] * (len(headers) - len(row))
-                    
-                # Create a dictionary with original header names
-                expense = dict(zip(headers, row))
-                expenses.append(expense)
-            
-            if DEBUG:
-                print(f"Got {len(expenses)} expenses before filtering")
-                if expenses:
-                    print(f"Sample expense: {expenses[0]}")
-            
-            # Apply filters using case-insensitive matching
-            filtered_expenses = expenses
-            
-            # Filter by direction if provided
-            if direction:
-                # Get the direction column name with correct case
-                direction_col = next((h for h in headers if h.lower() == 'direction'), 'Direction')
-                filtered_expenses = [exp for exp in filtered_expenses 
-                                    if exp.get(direction_col, '').lower() == direction.lower()]
-            
-            # Filter by person if provided
-            if person:
-                # Get the person column name with correct case
-                person_col = next((h for h in headers if h.lower() == 'person'), 'Person')
-                filtered_expenses = [exp for exp in filtered_expenses 
-                                    if exp.get(person_col, '').lower() == person.lower()]
-            
-            # Filter by status if provided
-            if status:
-                # Get the status column name with correct case
-                status_col = next((h for h in headers if h.lower() == 'status'), 'Status')
-                filtered_expenses = [exp for exp in filtered_expenses 
-                                    if exp.get(status_col, '').lower() == status.lower()]
-                
-            if DEBUG:
-                print(f"Got {len(filtered_expenses)} expenses after filtering")
-                if filtered_expenses:
-                    print(f"First filtered expense: {filtered_expenses[0]}")
-            
-            return filtered_expenses
-            
-        except Exception as e:
-            print(f"Error retrieving shared expenses: {str(e)}")
-            traceback.print_exc()
-            return []
-
-    def settle_shared_expense(self, person, amount=None):
-        """
-        Settle shared expenses for a specific person.
-        
-        Args:
-            person (str): The person name to settle with
-            amount (float, optional): Amount to settle. If None, settles all debts
-        
-        Returns:
-            dict: Result with details of the settlement
-        """
-        try:
-            # Select the "Shared Expenses" worksheet
-            worksheet = self.spreadsheet.worksheet("Shared Expenses")
-            
-            # Get all values including headers
-            all_values = worksheet.get_all_values()
-            
-            # Check if there's data (should be at least headers)
-            if len(all_values) <= 1:
-                return {"success": False, "message": "No shared expenses found"}
-                
-            # Extract headers and data
-            headers = all_values[0]
-            
-            # Find indexes for key columns
-            date_idx = headers.index("Date") if "Date" in headers else 0
-            person_idx = headers.index("Person") if "Person" in headers else 4
-            amount_idx = headers.index("Amount") if "Amount" in headers else 2
-            status_idx = headers.index("Status") if "Status" in headers else 6
-            direction_idx = headers.index("Direction") if "Direction" in headers else 5
-            settled_date_idx = headers.index("Settled Date") if "Settled Date" in headers else 7
-            
-            # Get expenses for this person with status 'Unpaid'
-            unpaid_expenses = []
-            for i, row in enumerate(all_values[1:], 2):  # Start from 2 to account for header
-                if len(row) <= max(person_idx, status_idx):
-                    continue  # Skip rows that don't have enough columns
-                
-                if (row[person_idx].lower() == person.lower() and 
-                    (row[status_idx].lower() == 'unpaid' or row[status_idx].lower() == 'partial')):
-                    unpaid_expenses.append({
-                        'row_idx': i,
-                        'amount': float(row[amount_idx]) if row[amount_idx] else 0,
-                        'direction': row[direction_idx] if direction_idx < len(row) else 'they_owe_me',
-                        'status': row[status_idx] if status_idx < len(row) else 'Unpaid'
-                    })
-            
-            if not unpaid_expenses:
-                return {"success": False, "message": f"No unpaid expenses found for {person}"}
-            
-            # Calculate total owed in each direction
-            they_owe_me = sum(exp['amount'] for exp in unpaid_expenses 
-                            if exp['direction'].lower() == 'they_owe_me')
-            i_owe_them = sum(exp['amount'] for exp in unpaid_expenses 
-                            if exp['direction'].lower() == 'i_owe_them')
-            
-            # Calculate net amount
-            net_amount = they_owe_me - i_owe_them
-            
-            # If no amount specified, settle all
-            if amount is None:
-                amount = abs(net_amount)
-            
-            # Update expenses based on the settlement direction and amount
-            today = datetime.datetime.now().strftime("%Y-%m-%d")
-            settled_amount = 0
-            
-            if net_amount > 0:  # They owe me
-                # First, apply settlement to 'they_owe_me' expenses
-                remaining = amount
-                for exp in sorted(unpaid_expenses, key=lambda x: x['amount']):
-                    if exp['direction'].lower() == 'they_owe_me' and remaining > 0:
-                        exp_amount = exp['amount']
-                        row_idx = exp['row_idx']
-                        
-                        if remaining >= exp_amount:
-                            # Fully settle this expense
-                            worksheet.update_cell(row_idx, status_idx + 1, "Settled")
-                            worksheet.update_cell(row_idx, settled_date_idx + 1, today)
-                            remaining -= exp_amount
-                            settled_amount += exp_amount
-                        else:
-                            # Partially settle this expense
-                            worksheet.update_cell(row_idx, status_idx + 1, "Partial")
-                            # We don't set settled date for partial settlements
-                            settled_amount += remaining
-                            remaining = 0
-            else:  # I owe them
-                # First, apply settlement to 'i_owe_them' expenses
-                remaining = amount
-                for exp in sorted(unpaid_expenses, key=lambda x: x['amount']):
-                    if exp['direction'].lower() == 'i_owe_them' and remaining > 0:
-                        exp_amount = exp['amount']
-                        row_idx = exp['row_idx']
-                        
-                        if remaining >= exp_amount:
-                            # Fully settle this expense
-                            worksheet.update_cell(row_idx, status_idx + 1, "Settled")
-                            worksheet.update_cell(row_idx, settled_date_idx + 1, today)
-                            remaining -= exp_amount
-                            settled_amount += exp_amount
-                        else:
-                            # Partially settle this expense
-                            worksheet.update_cell(row_idx, status_idx + 1, "Partial")
-                            # We don't set settled date for partial settlements
-                            settled_amount += remaining
-                            remaining = 0
-            
-            # Return settlement details
-            return {
-                "success": True,
-                "message": f"Settled ₱{settled_amount:.2f} with {person}",
-                "data": {
-                    "person": person,
-                    "settled_amount": settled_amount,
-                    "net_amount": net_amount,
-                    "they_owe_me": they_owe_me,
-                    "i_owe_them": i_owe_them
-                }
-            }
-                
-        except Exception as e:
-            print(f"Error settling shared expenses: {str(e)}")
-            traceback.print_exc()
-            return {"success": False, "message": f"Error settling shared expenses: {str(e)}"}
-
-    def get_balances(self):
-        """
-        Calculate the net balance with each person across all shared expenses.
-        
-        Returns:
-            dict: Dictionary with balances by person
-        """
-        try:
-            # Get all shared expenses
-            all_expenses = self.get_shared_expenses(status=None)  # Get all statuses
-            
-            if DEBUG:
-                print(f"Got {len(all_expenses)} expenses for balance calculation")
-                if all_expenses:
-                    print(f"Sample expense for balance: {all_expenses[0]}")
-            
-            # Find the actual column names as they appear in the spreadsheet
-            if all_expenses:
-                sample = all_expenses[0]
-                person_col = next((col for col in sample.keys() if col.lower() == 'person'), 'Person')
-                amount_col = next((col for col in sample.keys() if col.lower() == 'amount'), 'Amount')
-                direction_col = next((col for col in sample.keys() if col.lower() == 'direction'), 'Direction')
-                status_col = next((col for col in sample.keys() if col.lower() == 'status'), 'Status')
-            else:
-                # Default column names if no expenses
-                person_col = 'Person'
-                amount_col = 'Amount'
-                direction_col = 'Direction'
-                status_col = 'Status'
-            
-            # Group expenses by person
-            balances = {}
-            for expense in all_expenses:
-                person = expense.get(person_col, 'Unknown')
-                
-                # Try to convert amount to float, handle errors gracefully
-                try:
-                    amount = float(expense.get(amount_col, 0))
-                except (ValueError, TypeError):
-                    if DEBUG:
-                        print(f"Warning: Invalid amount value: {expense.get(amount_col)}")
-                    amount = 0
-                    
-                direction = expense.get(direction_col, 'they_owe_me')
-                status = expense.get(status_col, 'Unpaid')
-                
-                # Only include unpaid or partial in calculations
-                if status.lower() in ['unpaid', 'partial']:
-                    if person not in balances:
-                        balances[person] = {
-                            'they_owe_me': 0,
-                            'i_owe_them': 0,
-                            'net_amount': 0,
-                            'expenses': []
-                        }
-                    
-                    if direction.lower() == 'they_owe_me':
-                        balances[person]['they_owe_me'] += amount
-                    else:
-                        balances[person]['i_owe_them'] += amount
-                    
-                    balances[person]['expenses'].append(expense)
-            
-            # Calculate net amount for each person
-            for person in balances:
-                balances[person]['net_amount'] = balances[person]['they_owe_me'] - balances[person]['i_owe_them']
-            
-            if DEBUG:
-                print(f"Calculated balances: {balances}")
-            
-            return balances
-            
-        except Exception as e:
-            print(f"Error calculating balances: {str(e)}")
-            traceback.print_exc()
-            return {}
-
     def _ensure_sheets_exist(self):
         """Create necessary worksheets if they don't exist."""
         try:
@@ -435,158 +105,28 @@ class SheetsService:
                 preferences_sheet = self.spreadsheet.worksheet(PREFERENCES_SHEET)
                 preferences_sheet.append_row(["UserID", "Setting", "Value"])
                 print(f"Created {PREFERENCES_SHEET} worksheet")
-                
-            # Check and create Shared Expenses sheet (formerly Paid For)
-            if "Shared Expenses" not in worksheet_titles:
-                if "Paid For" in worksheet_titles:
-                    # Rename existing "Paid For" sheet to "Shared Expenses"
-                    old_sheet = self.spreadsheet.worksheet("Paid For")
-                    old_sheet.update_title("Shared Expenses")
-                    
-                    # Get the current headers
-                    current_headers = old_sheet.row_values(1)
-                    
-                    # Define the new headers
-                    new_headers = ["Date", "Description", "Amount", "Category", "Person", "Direction", "Status", "Settled Date"]
-                    
-                    # Create a mapping from old headers to new
-                    mapping = {
-                        "Paid For Person": "Person",
-                        "Status": "Status"
-                    }
-                    
-                    # Update headers if needed
-                    if current_headers != new_headers:
-                        # Find which columns exist and which need to be added
-                        existing_cols = {}
-                        for i, header in enumerate(current_headers):
-                            if header in mapping:
-                                existing_cols[mapping[header]] = i
-                            elif header in new_headers:
-                                existing_cols[header] = i
-                        
-                        # Update existing headers
-                        for i, header in enumerate(current_headers):
-                            if header in mapping:
-                                old_sheet.update_cell(1, i+1, mapping[header])
-                        
-                        # Add missing headers
-                        for header in new_headers:
-                            if header not in existing_cols and header not in [mapping.get(h) for h in current_headers]:
-                                old_sheet.insert_cols(len(current_headers) + 1)
-                                old_sheet.update_cell(1, len(current_headers) + 1, header)
-                                current_headers.append(header)
-                        
-                        # Update all rows with default values for new columns
-                        all_values = old_sheet.get_all_values()
-                        if len(all_values) > 1:  # If there's data besides headers
-                            for row_idx in range(2, len(all_values) + 1):
-                                # Set Direction to 'they_owe_me' for existing entries
-                                direction_col = new_headers.index("Direction") + 1
-                                old_sheet.update_cell(row_idx, direction_col, "they_owe_me")
-                    
-                    print(f"Renamed 'Paid For' to 'Shared Expenses' and updated columns")
-                else:
-                    # Create new Shared Expenses sheet with all columns
-                    self.spreadsheet.add_worksheet(title="Shared Expenses", rows=500, cols=10)
-                    shared_expenses_sheet = self.spreadsheet.worksheet("Shared Expenses")
-                    shared_expenses_sheet.append_row(["Date", "Description", "Amount", "Category", "Person", "Direction", "Status", "Settled Date"])
-                    print(f"Created Shared Expenses worksheet")
+            
+            # Check and create Debts sheet
+            if DEBTS_SHEET not in worksheet_titles:
+                self.spreadsheet.add_worksheet(title=DEBTS_SHEET, rows=1000, cols=20)
+                debts_sheet = self.spreadsheet.worksheet(DEBTS_SHEET)
+                # Create header row with all required columns
+                debts_sheet.append_row([
+                    "ID", 
+                    "Date", 
+                    "Person", 
+                    "Description", 
+                    "Amount", 
+                    "Direction", 
+                    "Status", 
+                    "SettledDate"
+                ])
+                print(f"Created {DEBTS_SHEET} worksheet")
                 
         except Exception as e:
             print(f"Error ensuring sheets exist: {str(e)}")
             traceback.print_exc()
 
-    def log_paid_for_expense(self, expense_data):
-        """
-        Log a 'paid for' expense to Google Sheets.
-        
-        Args:
-            expense_data (dict): Dictionary containing expense details
-                Required keys: date, description, amount, category, paid_for
-        
-        Returns:
-            bool: True if successful
-        """
-        try:
-            if DEBUG:
-                print(f"Logging 'paid for' expense to Google Sheets: {expense_data}")
-            
-            # Select the "Paid For" worksheet
-            worksheet = self.spreadsheet.worksheet("Paid For")
-            
-            # Prepare the row to append
-            row = [
-                expense_data["date"],
-                expense_data["description"],
-                expense_data["amount"],
-                expense_data["category"],
-                expense_data["paid_for"],
-                "Unpaid"  # Default status
-            ]
-            
-            # Append the row
-            worksheet.append_row(row)
-            
-            if DEBUG:
-                print("Successfully logged 'paid for' expense to Google Sheets")
-            
-            return True
-            
-        except Exception as e:
-            print(f"Error logging 'paid for' expense to Google Sheets: {str(e)}")
-            traceback.print_exc()
-            raise Exception(f"Error logging 'paid for' expense to Google Sheets: {str(e)}")
-
-    def get_paid_for_expenses(self, person=None):
-        """
-        Retrieve all 'paid for' expenses, optionally filtered by person name.
-        
-        Args:
-            person (str, optional): Person name to filter by
-        
-        Returns:
-            list: List of 'paid for' expense dictionaries
-        """
-        try:
-            # Select the "Paid For" worksheet
-            worksheet = self.spreadsheet.worksheet("Paid For")
-            
-            # Get all values including headers
-            all_values = worksheet.get_all_values()
-            
-            # Check if there's data (should be at least headers)
-            if len(all_values) <= 1:
-                return []
-                
-            # Extract headers and data
-            headers = all_values[0]
-            data = all_values[1:]
-            
-            # Convert to list of dictionaries
-            expenses = []
-            for row in data:
-                # Make sure we have complete rows
-                if len(row) < len(headers):
-                    continue
-                    
-                expense = dict(zip(headers, row))
-                
-                # Only include unpaid items
-                if expense.get('Status', '') == 'Unpaid':
-                    expenses.append(expense)
-            
-            # Filter by person if provided
-            if person:
-                expenses = [exp for exp in expenses if exp.get('Paid For Person', '').lower() == person.lower()]
-                
-            return expenses
-            
-        except Exception as e:
-            print(f"Error retrieving 'paid for' expenses: {str(e)}")
-            traceback.print_exc()
-            return []
-    
     # Expense Methods
     def log_expense(self, expense_data):
         """
@@ -714,7 +254,7 @@ class SheetsService:
                     # Add 2 to account for 1-based indexing and header row
                     rows_to_delete.append(i + 2)
             
-            # Delete rows in reverse order to avoid shifting issues
+            # Delete rows in reverse order
             rows_to_delete.sort(reverse=True)
             for row_index in rows_to_delete:
                 worksheet.delete_rows(row_index)
@@ -754,6 +294,316 @@ class SheetsService:
             print(f"Error retrieving categories: {str(e)}")
             traceback.print_exc()
             return DEFAULT_CATEGORIES
+    
+    # Debt Management Methods
+    def record_debt(self, debt_data):
+        """
+        Record a new debt (money owed to or from someone) to Google Sheets.
+        
+        Args:
+            debt_data (dict): Dictionary containing debt details
+                Required keys: id, date, person, description, amount, direction, status
+                Optional keys: settled_date (required if status is "settled")
+        
+        Returns:
+            bool: True if successful
+        """
+        try:
+            if DEBUG:
+                print(f"Recording debt to Google Sheets: {debt_data}")
+            
+            # Validate required fields
+            required_fields = ["id", "date", "person", "description", "amount", "direction", "status"]
+            for field in required_fields:
+                if field not in debt_data:
+                    print(f"Missing required field for debt: {field}")
+                    return False
+            
+            # Additional validation
+            if debt_data["status"] == "settled" and "settled_date" not in debt_data:
+                debt_data["settled_date"] = debt_data["date"]  # Default to same date if settled
+            
+            # Normalize person name (lowercase)
+            debt_data["person"] = debt_data["person"].lower().strip()
+            
+            # Select the "Debts" worksheet
+            worksheet = self.spreadsheet.worksheet(DEBTS_SHEET)
+            
+            # Prepare the row to append
+            row = [
+                debt_data["id"],
+                debt_data["date"],
+                debt_data["person"],
+                debt_data["description"],
+                debt_data["amount"],
+                debt_data["direction"],
+                debt_data["status"],
+                debt_data.get("settled_date", "")  # Empty string if not provided
+            ]
+            
+            # Append the row
+            worksheet.append_row(row)
+            
+            if DEBUG:
+                print("Successfully recorded debt to Google Sheets")
+            
+            return True
+            
+        except Exception as e:
+            print(f"Error recording debt to Google Sheets: {str(e)}")
+            traceback.print_exc()
+            raise Exception(f"Error recording debt to Google Sheets: {str(e)}")
+    
+    def get_debts_by_person(self, person, status=None):
+        """
+        Retrieve all debts related to a specific person, optionally filtered by status.
+        
+        Args:
+            person (str): Person name to filter by (case-insensitive)
+            status (str, optional): Filter by debt status ("active" or "settled")
+        
+        Returns:
+            list: List of debt dictionaries
+        """
+        try:
+            # Normalize person name
+            person = person.lower().strip()
+            
+            # Select the "Debts" worksheet
+            worksheet = self.spreadsheet.worksheet(DEBTS_SHEET)
+            
+            # Get all values including headers
+            all_values = worksheet.get_all_values()
+            
+            # Check if there's data (should be at least headers)
+            if len(all_values) <= 1:
+                return []
+                
+            # Extract headers and data
+            headers = all_values[0]
+            data = all_values[1:]
+            
+            # Convert to list of dictionaries
+            debts = []
+            for row in data:
+                debt = dict(zip(headers, row))
+                debts.append(debt)
+            
+            # Filter by person (case-insensitive)
+            filtered_debts = []
+            for debt in debts:
+                if debt.get('Person', '').lower().strip() == person:
+                    filtered_debts.append(debt)
+            
+            # Apply status filter if provided
+            if status:
+                filtered_debts = [debt for debt in filtered_debts if debt.get('Status') == status]
+                    
+            return filtered_debts
+            
+        except Exception as e:
+            print(f"Error retrieving debts by person: {str(e)}")
+            traceback.print_exc()
+            return []
+    
+    def get_net_balance(self, person=None):
+        """
+        Calculate net balance with a person or all outstanding balances.
+        
+        Args:
+            person (str, optional): Person to calculate balance for. If None, returns all balances.
+        
+        Returns:
+            dict or list: Dictionary with person's net balance or list of all balances
+        """
+        try:
+            # Select the "Debts" worksheet
+            worksheet = self.spreadsheet.worksheet(DEBTS_SHEET)
+            
+            # Get all values including headers
+            all_values = worksheet.get_all_values()
+            
+            # Check if there's data (should be at least headers)
+            if len(all_values) <= 1:
+                return {} if person else []
+                
+            # Extract headers and data
+            headers = all_values[0]
+            data = all_values[1:]
+            
+            # Convert to list of dictionaries and filter active debts
+            active_debts = []
+            for row in data:
+                debt = dict(zip(headers, row))
+                if debt.get('Status', '').lower() == 'active':
+                    active_debts.append(debt)
+            
+            # If no person specified, return all balances
+            if not person:
+                # Group by person and calculate net amounts
+                balances = {}
+                for debt in active_debts:
+                    person_name = debt.get('Person', '').lower().strip()
+                    amount = float(debt.get('Amount', 0))
+                    direction = debt.get('Direction', '')
+                    
+                    if person_name not in balances:
+                        balances[person_name] = 0
+                    
+                    # Add or subtract based on direction
+                    if direction == 'from':  # They owe you
+                        balances[person_name] += amount
+                    elif direction == 'to':  # You owe them
+                        balances[person_name] -= amount
+                
+                # Convert to list of dictionaries for easier consumption
+                result = []
+                for person_name, balance in balances.items():
+                    result.append({
+                        'person': person_name,
+                        'balance': balance,
+                        'you_owe': balance < 0,
+                        'they_owe': balance > 0,
+                        'amount': abs(balance)
+                    })
+                
+                return result
+            else:
+                # Calculate for specific person
+                normalized_person = person.lower().strip()
+                total_balance = 0
+                
+                for debt in active_debts:
+                    if debt.get('Person', '').lower().strip() == normalized_person:
+                        amount = float(debt.get('Amount', 0))
+                        direction = debt.get('Direction', '')
+                        
+                        if direction == 'from':  # They owe you
+                            total_balance += amount
+                        elif direction == 'to':  # You owe them
+                            total_balance -= amount
+                
+                return {
+                    'person': normalized_person,
+                    'balance': total_balance,
+                    'you_owe': total_balance < 0,
+                    'they_owe': total_balance > 0,
+                    'amount': abs(total_balance)
+                }
+            
+        except Exception as e:
+            print(f"Error calculating balance: {str(e)}")
+            traceback.print_exc()
+            return {} if person else []
+    
+    def settle_debt(self, debt_id, amount=None, settled_date=None):
+        """
+        Settle a debt completely or partially by its ID.
+        
+        Args:
+            debt_id (str): Unique ID of the debt to settle
+            amount (float, optional): Amount to settle. If None, settles the entire debt.
+            settled_date (str, optional): Date when the debt was settled (YYYY-MM-DD).
+                                        If None, uses today's date.
+        
+        Returns:
+            dict: Result containing success status and message
+        """
+        try:
+            # Select the "Debts" worksheet
+            worksheet = self.spreadsheet.worksheet(DEBTS_SHEET)
+            
+            # Get all values including headers
+            all_values = worksheet.get_all_values()
+            
+            # Check if there's data (should be at least headers)
+            if len(all_values) <= 1:
+                return {
+                    "success": False,
+                    "message": "No debts found"
+                }
+                
+            # Extract headers and data
+            headers = all_values[0]
+            data = all_values[1:]
+            
+            # Find the debt by ID
+            debt_row = None
+            debt_data = None
+            for i, row in enumerate(data):
+                row_dict = dict(zip(headers, row))
+                if row_dict.get('ID') == debt_id:
+                    debt_row = i + 2  # +2 for 1-indexed and header row
+                    debt_data = row_dict
+                    break
+            
+            if not debt_row or not debt_data:
+                return {
+                    "success": False,
+                    "message": f"Debt with ID {debt_id} not found"
+                }
+            
+            # Check if the debt is already settled
+            if debt_data.get('Status', '').lower() == 'settled':
+                return {
+                    "success": False,
+                    "message": "This debt is already settled"
+                }
+            
+            # Handle partial settlements
+            debt_amount = float(debt_data.get('Amount', 0))
+            if amount is not None and amount < debt_amount:
+                # Create a new partial debt record with the remaining amount
+                remaining_amount = debt_amount - amount
+                
+                # Create a copy of the original debt with updated fields
+                new_debt_data = debt_data.copy()
+                new_debt_data['ID'] = self._generate_uuid()
+                new_debt_data['Amount'] = str(remaining_amount)
+                new_debt_data['Description'] = f"{debt_data.get('Description')} (remaining)"
+                
+                # Insert the new row below the current one
+                worksheet.insert_row(
+                    [new_debt_data.get(h, '') for h in headers],
+                    debt_row + 1
+                )
+                
+                # Update the settled amount
+                worksheet.update_cell(debt_row, headers.index('Amount') + 1, str(amount))
+            
+            # Set settled date if provided, otherwise use today's date
+            if not settled_date:
+                settled_date = datetime.datetime.now().strftime("%Y-%m-%d")
+            
+            # Update the debt status to settled
+            status_col = headers.index('Status') + 1
+            settled_date_col = headers.index('SettledDate') + 1
+            
+            worksheet.update_cell(debt_row, status_col, "settled")
+            worksheet.update_cell(debt_row, settled_date_col, settled_date)
+            
+            return {
+                "success": True,
+                "message": f"Debt successfully settled",
+                "data": {
+                    "id": debt_id,
+                    "amount": amount if amount is not None else debt_amount,
+                    "settled_date": settled_date
+                }
+            }
+            
+        except Exception as e:
+            print(f"Error settling debt: {str(e)}")
+            traceback.print_exc()
+            return {
+                "success": False,
+                "message": f"Error settling debt: {str(e)}"
+            }
+    
+    def _generate_uuid(self):
+        """Generate a simple UUID string for debt records."""
+        import uuid
+        return str(uuid.uuid4())
     
     # Budget Methods
     def set_budget(self, budget_data):
@@ -993,10 +843,6 @@ class SheetsService:
             traceback.print_exc()
             return None
     
-    """
-Add this _date_from_str method to your SheetsService class in sheets.py
-"""
-
     def _date_from_str(self, date_str):
         """
         Convert string date to datetime.date object.
@@ -1014,4 +860,3 @@ Add this _date_from_str method to your SheetsService class in sheets.py
             if DEBUG:
                 print(f"Error converting date '{date_str}': {str(e)}")
             return datetime.datetime(1970, 1, 1).date()
-    

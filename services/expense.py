@@ -16,7 +16,6 @@ class ExpenseService:
         """
         Process a user's expense entry.
         Supports processing multiple expenses from a single message.
-        Also handles shared expenses (both 'they_owe_me' and 'i_owe_them' formats).
         
         Args:
             user_input (str): Natural language input from the user
@@ -36,7 +35,6 @@ class ExpenseService:
                 # Multiple expenses
                 successes = []
                 failures = []
-                shared_successes = []
                 
                 for expense_data in parsed_result:
                     # Check for parsing errors
@@ -44,19 +42,9 @@ class ExpenseService:
                         failures.append(expense_data)
                         continue
                     
-                    # Check if this is a shared expense
-                    person = expense_data.get('person')
-                    direction = expense_data.get('direction')
-                    
                     # Log the expense to sheets
                     try:
-                        # Always log as a regular expense
                         success = self.sheets.log_expense(expense_data)
-                        
-                        # If it's a shared expense, also log it to the Shared Expenses sheet
-                        if person and direction and success:
-                            self.sheets.log_shared_expense(expense_data)
-                            shared_successes.append(expense_data)
                         
                         if success:
                             successes.append(expense_data)
@@ -72,18 +60,7 @@ class ExpenseService:
                     # Format success message for multiple expenses
                     expense_details = []
                     for exp in successes:
-                        person = exp.get('person')
-                        direction = exp.get('direction')
-                        
-                        if person and direction:
-                            if direction == 'they_owe_me':
-                                shared_text = f" ({person} owes you)"
-                            else:  # i_owe_them
-                                shared_text = f" (you owe {person})"
-                        else:
-                            shared_text = ""
-                        
-                        expense_details.append(f"• {exp['amount']} for {exp['description']}{shared_text}")
+                        expense_details.append(f"• {exp['amount']} for {exp['description']}")
                     
                     expense_list = "\n".join(expense_details)
                     return {
@@ -92,7 +69,6 @@ class ExpenseService:
                         "data": {
                             "successes": successes,
                             "failures": failures,
-                            "shared_count": len(shared_successes),
                             "multiple": True
                         }
                     }
@@ -117,27 +93,13 @@ class ExpenseService:
                         "data": expense_data
                     }
                 
-                # Check if this is a shared expense
-                person = expense_data.get('person')
-                direction = expense_data.get('direction')
-                
                 # Log the expense to sheets
                 success = self.sheets.log_expense(expense_data)
-                
-                # If it's a shared expense, also log it to the Shared Expenses sheet
-                if person and direction and success:
-                    self.sheets.log_shared_expense(expense_data)
-                    if direction == 'they_owe_me':
-                        shared_text = f" ({person} owes you)"
-                    else:  # i_owe_them
-                        shared_text = f" (you owe {person})"
-                else:
-                    shared_text = ""
                 
                 # Generate confirmation message
                 return {
                     "success": success,
-                    "message": f"Logged {expense_data['amount']} for {expense_data['description']}{shared_text}",
+                    "message": f"Logged {expense_data['amount']} for {expense_data['description']}",
                     "data": expense_data
                 }
             
@@ -147,62 +109,6 @@ class ExpenseService:
             return {
                 "success": False,
                 "message": f"Error processing expense: {str(e)}",
-                "data": {}
-            }
-    
-    def settle_debt(self, user_input):
-        """
-        Process a settlement request.
-        
-        Args:
-            user_input (str): Natural language input describing the settlement
-            
-        Returns:
-            dict: Result containing success status and message
-        """
-        try:
-            # Extract person and amount from the input
-            # Simple pattern: "settle [person] [amount]"
-            parts = user_input.lower().replace("settle", "").strip().split()
-            
-            person = None
-            amount = None
-            
-            # Try to identify person and amount
-            for i, part in enumerate(parts):
-                # Check if this part is a number (amount)
-                try:
-                    amt = float(part.replace(',', ''))
-                    amount = amt
-                    # Person is likely before the amount
-                    if i > 0 and person is None:
-                        person = parts[i-1]
-                except ValueError:
-                    # If not a number and we haven't found a person yet, this might be the person
-                    if i == 0 or (person is None and i < len(parts) - 1):
-                        person = part
-            
-            # If we still don't have a person, use the first word
-            if person is None and parts:
-                person = parts[0]
-            
-            # If still no person found, return error
-            if not person:
-                return {
-                    "success": False,
-                    "message": "Could not identify who to settle with. Please use format: settle [person] [amount]"
-                }
-            
-            # Perform the settlement
-            result = self.sheets.settle_shared_expense(person, amount)
-            return result
-            
-        except Exception as e:
-            if DEBUG:
-                print(f"Error settling debt: {str(e)}")
-            return {
-                "success": False,
-                "message": f"Error settling debt: {str(e)}",
                 "data": {}
             }
     

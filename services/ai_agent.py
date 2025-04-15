@@ -12,10 +12,189 @@ class AIAgent:
         """Initialize the AI Agent with OpenAI client."""
         self.client = OpenAI(api_key=OPENAI_API_KEY)
         
+    def parse_debt(self, user_input):
+        """
+        Extract structured debt data from user input.
+        
+        Args:
+            user_input (str): Natural language input from the user
+            
+        Returns:
+            dict: Structured debt data dictionary
+        """
+        today = datetime.datetime.now().strftime("%Y-%m-%d")
+        
+        try:
+            completion = self.client.chat.completions.create(
+                model=OPENAI_MODEL,
+                messages=[
+                    {
+                        "role": "system", 
+                        "content": "You are a financial assistant that extracts debt information from user messages."
+                    },
+                    {
+                        "role": "user", 
+                        "content": f"""Extract debt information from this message: '{user_input}'
+                        
+                        Return ONLY a JSON object with these fields:
+                        - "date": in YYYY-MM-DD format (default to today: {today})
+                        - "person": the name of the person involved in the debt (normalize to lowercase)
+                        - "description": what the debt is for (can be empty if not mentioned)
+                        - "amount": the monetary amount as a number (no currency symbols)
+                        - "direction": either "to" (you owe them) or "from" (they owe you)
+                        
+                        IMPORTANT GUIDELINES:
+                        
+                        1. MOST IMPORTANT PATTERN: If text is inside parentheses, it's a person's name
+                           - Look for a pattern: "<amount> <description> (<person_name>)"
+                           - For example: "200 hotdog (john)" means john owes me 200 for hotdog
+                           - For example: "500 dinner (jana)" means jana owes me 500 for dinner
+                           - ALWAYS set direction to "from" when a name is in parentheses (they owe the user)
+                           
+                        2. If a dash precedes a word, it's a person's name and it means the user owes them
+                           - Look for pattern: "<amount> <description> - <person_name>"
+                           - For example: "200 lunch - mary" means I owe mary 200 for lunch
+                           - ALWAYS set direction to "to" when a name follows a dash (user owes them)
+                        
+                        3. Make sure to accurately extract:
+                           - The correct person name (even if it's a unique or uncommon name)
+                           - The correct amount as a number
+                           - The correct description of what the debt is for
+                           
+                        4. By default, if no clear direction can be determined:
+                           - If a person name is in parentheses, they owe the user (direction="from")
+                           - If a person name follows a dash, the user owes them (direction="to")
+                        """
+                    }
+                ],
+                temperature=0
+            )
+            
+            # Get the response content
+            content = completion.choices[0].message.content
+            
+            # Clean the content if needed
+            if "```json" in content:
+                content = content.split("```json")[1].split("```")[0].strip()
+            elif "```" in content:
+                content = content.split("```")[1].strip()
+                
+            # Parse JSON
+            parsed_data = json.loads(content)
+            
+            if DEBUG:
+                print(f"Parsed debt data: {parsed_data}")
+            
+            return parsed_data
+            
+        except Exception as e:
+            print(f"Error parsing debt: {str(e)}")
+            # Return default structure for error handling
+            return {
+                "date": today,
+                "person": "",
+                "description": user_input,
+                "amount": 0,
+                "direction": "from",
+                "error": str(e)
+            }
+    
+    def parse_debt_settlement(self, user_input):
+        """
+        Extract structured settlement data from user input.
+        
+        Args:
+            user_input (str): Natural language input from the user
+            
+        Returns:
+            dict: Structured settlement data dictionary
+        """
+        today = datetime.datetime.now().strftime("%Y-%m-%d")
+        
+        try:
+            # First try direct pattern matching for "settle [person] [amount]"
+            import re
+            settle_pattern = re.search(r'settle\s+(\w+)\s+(\d+)', user_input.lower())
+            if settle_pattern:
+                person = settle_pattern.group(1)
+                amount = float(settle_pattern.group(2))
+                
+                if DEBUG:
+                    print(f"Direct pattern match: settling with {person} for {amount}")
+                
+                return {
+                    "date": today,
+                    "person": person.lower(),
+                    "amount": amount
+                    # Don't specify direction - we'll check all debts with this person regardless of direction
+                }
+            
+            # If no direct pattern match, use AI
+            completion = self.client.chat.completions.create(
+                model=OPENAI_MODEL,
+                messages=[
+                    {
+                        "role": "system", 
+                        "content": "You are a financial assistant that extracts debt settlement information from user messages."
+                    },
+                    {
+                        "role": "user", 
+                        "content": f"""Extract debt settlement information from this message: '{user_input}'
+                        
+                        Return ONLY a JSON object with these fields:
+                        - "date": in YYYY-MM-DD format (default to today: {today})
+                        - "person": the name of the person involved in the settlement (normalize to lowercase)
+                        - "amount": the monetary amount as a number (no currency symbols)
+                        
+                        IMPORTANT GUIDELINES:
+                        1. Focus on extracting:
+                           - The correct person name who is involved in the settlement
+                           - The monetary amount being settled
+                           - The date if specified (default to today)
+                        
+                        2. For simple settlement messages like:
+                           - "settle john 100"
+                           - "settle 200 with mary"
+                           - "pay sara 150"
+                           
+                        Just extract the person and amount - we'll determine the direction later.
+                        """
+                    }
+                ],
+                temperature=0
+            )
+            
+            # Get the response content
+            content = completion.choices[0].message.content
+            
+            # Clean the content if needed
+            if "```json" in content:
+                content = content.split("```json")[1].split("```")[0].strip()
+            elif "```" in content:
+                content = content.split("```")[1].strip()
+                
+            # Parse JSON
+            parsed_data = json.loads(content)
+            
+            if DEBUG:
+                print(f"Parsed settlement data: {parsed_data}")
+            
+            return parsed_data
+            
+        except Exception as e:
+            print(f"Error parsing settlement: {str(e)}")
+            # Return default structure for error handling
+            return {
+                "date": today,
+                "person": "",
+                "amount": None,
+                "error": str(e)
+            }
+
     def detect_intent(self, user_input):
         """
         Detect the user's intent from their natural language input.
-        Updated to support custom period budgets.
+        Updated to support debt tracking functionality with parentheses syntax.
         
         Args:
             user_input (str): Natural language input from the user
@@ -30,7 +209,7 @@ class AIAgent:
                 messages=[
                     {
                         "role": "system", 
-                        "content": "You are a financial assistant that categorizes user messages into clear intents. Your primary purpose is to distinguish expense entries from other requests."
+                        "content": "You are a financial assistant that categorizes user messages into clear intents. Your primary purpose is to distinguish between expense entries, debt tracking, and other requests."
                     },
                     {
                         "role": "user", 
@@ -38,35 +217,40 @@ class AIAgent:
                         Return ONLY a JSON with 'intent' and 'data'.
                         
                         Intents are strictly one of:
-                        - "expense" (user is logging an expense)
+                        - "expense" (user is logging a personal expense)
                         - "summary" (user wants to see a summary of expenses)
                         - "budget_status" (user wants to check their budget status)
                         - "set_budget" (user wants to set or update a budget)
                         - "delete_expense" (user wants to delete an expense)
                         - "help" (user needs help)
+                        - "debt_add" (user is recording money owed to/from someone)
+                        - "debt_settle" (user is settling a debt with someone)
+                        - "debt_balance" (user wants to check debt balance with someone)
                         - "other" (anything else)
                         
                         IMPORTANT GUIDELINES:
-                        1. If the message contains a product/service name and an amount, classify as "expense"
-                        2. If the message is very short with just an item and a number, it's an "expense"
-                        3. Words like "summary", "report", "show me" suggest a "summary" intent
-                        4. Budget-related words like "budget", "spending limit" suggest "budget_status" or "set_budget"
-                        5. Words like "delete", "remove", "erase" suggest a "delete_expense" intent
-                        6. Messages about "setting budget for next X days" are "set_budget" intent
-                        7. Messages asking about "how much is left in my budget" are "budget_status" intent
+                        1. MOST IMPORTANT: Look for parentheses pattern first! If the message contains anything in parentheses ( ), assume it's a person name and classify as "debt_add"
+                           Examples: 
+                           - "200 hotdog (john)" → debt_add
+                           - "500 dinner (jana)" → debt_add
+                           - "10 coffee (alice)" → debt_add
+                           - ANY amount followed by text and then (any_name) → debt_add
                         
-                        Examples of "set_budget" intent with custom periods:
-                        - "set 200 budget for next 5 days" -> set_budget
-                        - "create a budget of 500 for the next 14 days" -> set_budget
+                        2. If the message has a dash before a word, it's likely a person name, classify as "debt_add"
+                           Examples:
+                           - "200 lunch - mary" → debt_add
+                           - "50 tickets - bob" → debt_add
                         
-                        Examples of "budget_status" for custom periods:
-                        - "how much do I have left in my 5-day budget" -> budget_status
-                        - "check my custom period budget" -> budget_status
+                        3. If parentheses or dash patterns are not found:
+                           - If the message contains a product/service name and an amount without any person mentioned, classify as "expense"
+                           - If the message mentions money owed by or to a specific person, classify as "debt_add"
+                           - If the message mentions settling, paying, or clearing a debt with someone, classify as "debt_settle"
+                           - If the message asks about balance, what someone owes, or what is owed to someone, classify as "debt_balance"
                         
-                        For "expense" intent, include 'amount' and 'description' in data if possible.
-                        For "summary" intent, include 'period' (e.g., 'this week', 'last month') in data.
-                        For "set_budget", include 'amount', 'category' (if mentioned), 'period' ('weekly', 'monthly', or 'custom'), and 'days' (if custom period) in data.
-                        For "delete_expense", include any identifiable information like 'description' or 'date' in data.
+                        4. For debt intents, include relevant information in the data field:
+                           - For "debt_add", include 'person', 'amount', and 'direction' ('to' or 'from') if detectable
+                           - For "debt_settle", include 'person' and 'amount' if mentioned
+                           - For "debt_balance", include 'person' if a specific person is mentioned
                         """
                     }
                 ],
@@ -99,9 +283,6 @@ class AIAgent:
         """
         Extract structured expense data from user input.
         Supports parsing multiple expenses from a single message.
-        Detects both directions of shared expenses:
-        - 'paid for someone' format using parentheses: "50 lunch (Jane)" - they owe me
-        - 'I owe someone' format using dash: "50 lunch - Jane" - I owe them
         
         Args:
             user_input (str): Natural language input from the user
@@ -118,19 +299,11 @@ class AIAgent:
                 messages=[
                     {
                         "role": "system", 
-                        "content": "You are a financial assistant that extracts expense information from user messages. You analyze the exact format and semantics to determine shared expense relationships accurately."
+                        "content": "You are a financial assistant that extracts expense information from user messages."
                     },
                     {
                         "role": "user", 
                         "content": f"""Extract expense information from this message: '{user_input}'
-                        
-                        IMPORTANT: Pay special attention to shared expense formats:
-                        1. Format "X (Person)" means Person owes the user (direction: "they_owe_me")
-                        2. Format "X - Person" means the user owes Person (direction: "i_owe_them")
-                        
-                        Examples for clarity:
-                        - "50 lunch (Jane)" → Person: Jane, Direction: they_owe_me
-                        - "50 lunch - Jane" → Person: Jane, Direction: i_owe_them
                         
                         If there is only ONE expense, return a JSON object with these fields:
                         - "date": in YYYY-MM-DD format (default to today: {today})
@@ -138,8 +311,6 @@ class AIAgent:
                         - "amount": the monetary amount as a number (no currency symbols)
                         - "category": the best matching category from this list: {', '.join(categories)}
                         - "multiple": false
-                        - "person": if shared expense, the name of the other person, otherwise null
-                        - "direction": if shared expense, either "they_owe_me" or "i_owe_them", otherwise null
                         
                         If there are MULTIPLE expenses, return a JSON with:
                         - "multiple": true
@@ -201,176 +372,8 @@ class AIAgent:
                 "amount": 0,
                 "category": "Other",
                 "source": "telegram",
-                "person": None,
-                "direction": None,
                 "error": str(e)
             }
-    
-    def generate_summary(self, expenses, period=None, budget_data=None):
-        """
-        Generate a natural language summary of expenses.
-        
-        Args:
-            expenses (list): List of expense dictionaries
-            period (str, optional): Time period for the summary
-            budget_data (dict, optional): Budget information to include in the summary
-            
-        Returns:
-            str: Natural language summary of expenses
-        """
-        try:
-            # Calculate some basic statistics
-            total_spent = sum(float(exp.get('Amount', 0)) for exp in expenses)
-            category_totals = {}
-            
-            for expense in expenses:
-                category = expense.get('Category', 'Other')
-                amount = float(expense.get('Amount', 0))
-                
-                if category in category_totals:
-                    category_totals[category] += amount
-                else:
-                    category_totals[category] = amount
-            
-            # Sort categories by amount spent
-            sorted_categories = sorted(
-                category_totals.items(), 
-                key=lambda x: x[1], 
-                reverse=True
-            )
-            
-            # Prepare data for the AI
-            expenses_json = json.dumps(expenses[:10])  # Limit to first 10 for prompt size
-            categories_json = json.dumps(sorted_categories)
-            
-            completion = self.client.chat.completions.create(
-                model=OPENAI_MODEL,
-                messages=[
-                    {
-                        "role": "system", 
-                        "content": "You are a financial assistant that creates concise, insightful summaries of spending patterns."
-                    },
-                    {
-                        "role": "user", 
-                        "content": f"""Create a spending summary for {period if period else 'recent expenses'}.
-                        
-                        Expense data (sample):
-                        {expenses_json}
-                        
-                        Total spent: {total_spent}
-                        
-                        Spending by category:
-                        {categories_json}
-                        
-                        {f'Budget information: {json.dumps(budget_data)}' if budget_data else ''}
-                        
-                        GUIDELINES:
-                        1. Create a concise, conversational summary of spending patterns
-                        2. Highlight top spending categories and any unusual expenses
-                        3. If budget data is available, mention how spending compares to budget
-                        4. Include the total amount spent
-                        5. Keep your response under 250 words
-                        """
-                    }
-                ],
-                temperature=0.7  # Slightly higher temperature for more natural language
-            )
-            
-            # Get the response content
-            summary = completion.choices[0].message.content
-            
-            if DEBUG:
-                print(f"Generated summary: {summary}")
-                
-            return summary
-            
-        except Exception as e:
-            print(f"Error generating summary: {str(e)}")
-            # Return a basic summary for error handling
-            return f"Summary for {period if period else 'recent expenses'}: Total spent: {sum(float(exp.get('Amount', 0)) for exp in expenses)}. Error: {str(e)}"
-    
-    def generate_summary(self, expenses, period=None, budget_data=None):
-        """
-        Generate a natural language summary of expenses.
-        
-        Args:
-            expenses (list): List of expense dictionaries
-            period (str, optional): Time period for the summary
-            budget_data (dict, optional): Budget information to include in the summary
-            
-        Returns:
-            str: Natural language summary of expenses
-        """
-        try:
-            # Calculate some basic statistics
-            total_spent = sum(float(exp.get('Amount', 0)) for exp in expenses)
-            category_totals = {}
-            
-            for expense in expenses:
-                category = expense.get('Category', 'Other')
-                amount = float(expense.get('Amount', 0))
-                
-                if category in category_totals:
-                    category_totals[category] += amount
-                else:
-                    category_totals[category] = amount
-            
-            # Sort categories by amount spent
-            sorted_categories = sorted(
-                category_totals.items(), 
-                key=lambda x: x[1], 
-                reverse=True
-            )
-            
-            # Prepare data for the AI
-            expenses_json = json.dumps(expenses[:10])  # Limit to first 10 for prompt size
-            categories_json = json.dumps(sorted_categories)
-            
-            completion = self.client.chat.completions.create(
-                model=OPENAI_MODEL,
-                messages=[
-                    {
-                        "role": "system", 
-                        "content": "You are a financial assistant that creates concise, insightful summaries of spending patterns."
-                    },
-                    {
-                        "role": "user", 
-                        "content": f"""Create a spending summary for {period if period else 'recent expenses'}.
-                        
-                        Expense data (sample):
-                        {expenses_json}
-                        
-                        Total spent: {total_spent}
-                        
-                        Spending by category:
-                        {categories_json}
-                        
-                        {f'Budget information: {json.dumps(budget_data)}' if budget_data else ''}
-                        
-                        GUIDELINES:
-                        1. Create a concise, conversational summary of spending patterns
-                        2. Highlight top spending categories and any unusual expenses
-                        3. If budget data is available, mention how spending compares to budget
-                        4. Include the total amount spent
-                        5. Keep your response under 250 words
-                        """
-                    }
-                ],
-                temperature=0.7  # Slightly higher temperature for more natural language
-            )
-            
-            # Get the response content
-            summary = completion.choices[0].message.content
-            
-            if DEBUG:
-                print(f"Generated summary: {summary}")
-                
-            return summary
-            
-        except Exception as e:
-            print(f"Error generating summary: {str(e)}")
-            # Return a basic summary for error handling
-            return f"Summary for {period if period else 'recent expenses'}: Total spent: {sum(float(exp.get('Amount', 0)) for exp in expenses)}. Error: {str(e)}"
     
     def analyze_budget(self, budget_data, expenses):
         """

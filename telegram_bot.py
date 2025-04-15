@@ -3,8 +3,10 @@ Financial Tracker Bot
 Main entry point for the Telegram bot.
 """
 import threading
+import uuid
 import logging
 from http.server import HTTPServer, BaseHTTPRequestHandler
+from services.debt import DebtService
 from telegram import Update
 from telegram.ext import (
     ApplicationBuilder, 
@@ -37,12 +39,17 @@ logger = logging.getLogger(__name__)
 AWAITING_BUDGET_AMOUNT = 1
 AWAITING_CUSTOM_DAYS = 2
 AWAITING_CUSTOM_BUDGET = 3
+AWAITING_DEBT_PERSON = 4
+AWAITING_DEBT_AMOUNT = 5
+AWAITING_DEBT_DIRECTION = 6
+AWAITING_DEBT_DESCRIPTION = 7
 
 # Initialize services
 ai_agent = AIAgent()
 expense_service = ExpenseService()
 budget_service = BudgetService()
 summary_service = SummaryService()
+debt_service = DebtService()
 ui = TelegramUI()
 
 # Simple HTTP request handler for Render
@@ -67,9 +74,35 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Hi {user.first_name}! I'm your Financial Tracker Bot.\n\n"
         f"• Type expenses like 'coffee 3.50' to log them\n"
         f"• Set a budget with 'set 300 budget for 14 days'\n"
-        f"• Use the buttons below to view expenses or get help",
+        f"• Track debts with '200 hotdog (john)' when someone owes you\n"
+        f"• Use '200 lunch - mary' when you owe someone\n"
+        f"• Check balances with '/balance'\n"
+        f"• Use the buttons below for quick access:",
         reply_markup=ui.get_main_keyboard()
     )
+
+async def balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Handle /balance command to show debt balances.
+    
+    Args:
+        update (Update): The update object
+        context (ContextTypes.DEFAULT_TYPE): The context object
+    """
+    result = debt_service.list_all_balances()
+    
+    if result["success"]:
+        await update.message.reply_text(
+            ui.format_balance_summary(result["data"]),
+            parse_mode='Markdown',
+            reply_markup=ui.get_debt_keyboard()
+        )
+    else:
+        await update.message.reply_text(
+            f"❌ {result['message']}",
+            reply_markup=ui.get_main_keyboard()
+        )
+
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
@@ -80,10 +113,11 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context (ContextTypes.DEFAULT_TYPE): The context object
     """
     await update.message.reply_text(
-        ui.format_help_message(),
+        ui.format_help_message_with_debt(),
         parse_mode='Markdown',
         reply_markup=ui.get_main_keyboard()
     )
+
 async def custom_budget_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Handle /cb command to set custom period budgets.
@@ -237,6 +271,153 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.user_data.get('awaiting_custom_budget'):
         return await handle_custom_budget_input(update, context)
     
+    # Check if we're waiting for debt person input
+    if context.user_data.get('awaiting_debt_person'):
+        return await handle_debt_person_input(update, context)
+    
+    # Check if we're waiting for debt amount input
+    if context.user_data.get('awaiting_debt_amount'):
+        return await handle_debt_amount_input(update, context)
+    
+    # Check if we're waiting for debt direction input
+    if context.user_data.get('awaiting_debt_direction'):
+        return await handle_debt_direction_input(update, context)
+    
+    # Check if we're waiting for debt description input
+    if context.user_data.get('awaiting_debt_description'):
+        return await handle_debt_description_input(update, context)
+    
+    # Check if we're waiting for settlement person input
+    if context.user_data.get('awaiting_settlement_person'):
+        return await handle_debt_person_input(update, context)
+    
+    # Check if we're waiting for settlement amount input
+    if context.user_data.get('awaiting_settlement_amount'):
+        return await handle_debt_amount_input(update, context)
+    
+    # DIRECT PATTERN MATCHING: Check for settlement pattern before AI processing
+    import re
+    settle_match = re.search(r'settle\s+(\w+)\s+(\d+)', user_input.lower())
+    if settle_match:
+        if DEBUG:
+            logger.info(f"Found direct settlement pattern")
+        
+        person = settle_match.group(1)
+        amount = float(settle_match.group(2))
+        
+        # Create settlement data
+        settlement_data = {
+            "person": person.lower(),
+            "amount": amount,
+            "date": datetime.datetime.now().strftime("%Y-%m-%d")
+        }
+        
+        # Process settlement directly
+        result = debt_service.settle_debt(settlement_data)
+        
+        if result["success"]:
+            await update.message.reply_text(
+                ui.format_settlement_confirmation(result["data"]),
+                reply_markup=ui.get_debt_keyboard()
+            )
+        else:
+            await update.message.reply_text(
+                f"❌ {result['message']}",
+                reply_markup=ui.get_debt_keyboard()
+            )
+        return  # Exit early
+    
+    # DIRECT PATTERN MATCHING: Check for parentheses pattern before AI processing
+    parentheses_match = re.search(r'\(([^)]+)\)', user_input)
+    if parentheses_match:
+        if DEBUG:
+            logger.info(f"Found parentheses pattern - direct debt processing")
+        
+        # Extract person and description
+        person = parentheses_match.group(1)
+        # Extract description
+        description = user_input.split('(')[0].strip()
+        # Find amount 
+        amount_match = re.search(r'\d+', description)
+        if amount_match:
+            amount = float(amount_match.group(0))
+            # Description without the amount
+            desc_words = description.split()
+            description = ' '.join([w for w in desc_words if not w.isdigit()])
+            
+            # Create debt data
+            debt_data = {
+                "id": str(uuid.uuid4()),
+                "person": person.lower(),
+                "amount": amount,
+                "description": description.strip(),
+                "direction": "from",
+                "date": datetime.datetime.now().strftime("%Y-%m-%d"),
+                "status": "active"
+            }
+            
+            if DEBUG:
+                logger.info(f"Created debt data: {debt_data}")
+            
+            # Process debt directly
+            result = debt_service.sheets.record_debt(debt_data)
+            
+            if result:
+                await update.message.reply_text(
+                    ui.format_debt_confirmation(debt_data),
+                    reply_markup=ui.get_debt_keyboard()
+                )
+            else:
+                await update.message.reply_text(
+                    f"❌ Error recording debt",
+                    reply_markup=ui.get_main_keyboard()
+                )
+            return  # Exit early, don't continue to AI intent detection
+    
+    # DIRECT PATTERN MATCHING: Check for dash pattern before AI processing
+    dash_match = re.search(r'(\d+\s+[^-]+)\s+-\s+(\w+)', user_input)
+    if dash_match:
+        if DEBUG:
+            logger.info(f"Found dash pattern - direct debt processing")
+        
+        # Extract person and description
+        description_part = dash_match.group(1).strip()
+        person = dash_match.group(2).strip()
+        
+        # Find amount
+        amount_match = re.search(r'\d+', description_part)
+        if amount_match:
+            amount = float(amount_match.group(0))
+            # Description without the amount
+            desc_words = description_part.split()
+            description = ' '.join([w for w in desc_words if not w.isdigit()])
+            
+            # Create debt data
+            debt_data = {
+                "id": str(uuid.uuid4()),
+                "person": person.lower(),
+                "amount": amount,
+                "description": description.strip(),
+                "direction": "to",
+                "date": datetime.datetime.now().strftime("%Y-%m-%d"),
+                "status": "active"
+            }
+            
+            # Process debt directly
+            result = debt_service.sheets.record_debt(debt_data)
+            
+            if result:
+                await update.message.reply_text(
+                    ui.format_debt_confirmation(debt_data),
+                    reply_markup=ui.get_debt_keyboard()
+                )
+            else:
+                await update.message.reply_text(
+                    f"❌ Error recording debt",
+                    reply_markup=ui.get_main_keyboard()
+                )
+            return  # Exit early, don't continue to AI intent detection
+    
     # Detect intent using AI
     intent_data = ai_agent.detect_intent(user_input)
     
@@ -245,6 +426,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Process based on intent
     if intent_data["intent"] == "expense":
+        # Process as a personal expense
         result = expense_service.process_expense(user_input)
         
         if result["success"]:
@@ -260,6 +442,21 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     ui.format_expense_confirmation(result["data"]),
                     reply_markup=ui.get_main_keyboard()
                 )
+        else:
+            await update.message.reply_text(
+                f"❌ {result['message']}",
+                reply_markup=ui.get_main_keyboard()
+            )
+    
+    elif intent_data["intent"] == "debt_add":
+        # Process as a debt only, not as an expense
+        result = debt_service.add_debt(user_input)
+        
+        if result["success"]:
+            await update.message.reply_text(
+                ui.format_debt_confirmation(result["data"]),
+                reply_markup=ui.get_debt_keyboard()
+            )
         else:
             await update.message.reply_text(
                 f"❌ {result['message']}",
@@ -336,9 +533,54 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=ui.get_main_keyboard()
             )
     
+    elif intent_data["intent"] == "debt_settle":
+        result = debt_service.settle_debt(user_input)
+        
+        if result["success"]:
+            await update.message.reply_text(
+                ui.format_settlement_confirmation(result["data"]),
+                reply_markup=ui.get_debt_keyboard()
+            )
+        else:
+            await update.message.reply_text(
+                f"❌ {result['message']}",
+                reply_markup=ui.get_main_keyboard()
+            )
+    
+    elif intent_data["intent"] == "debt_balance":
+        # Check if a specific person was mentioned
+        person = intent_data.get("data", {}).get("person")
+        
+        if person:
+            # Get balance for specific person
+            result = debt_service.get_balance(person)
+        else:
+            # Get all balances
+            result = debt_service.list_all_balances()
+        
+        if result["success"]:
+            if person:
+                # Single person balance
+                await update.message.reply_text(
+                    result["message"],
+                    reply_markup=ui.get_debt_keyboard()
+                )
+            else:
+                # All balances
+                await update.message.reply_text(
+                    ui.format_balance_summary(result["data"]),
+                    parse_mode='Markdown',
+                    reply_markup=ui.get_debt_keyboard()
+                )
+        else:
+            await update.message.reply_text(
+                f"❌ {result['message']}",
+                reply_markup=ui.get_main_keyboard()
+            )
+            
     elif intent_data["intent"] == "help":
         await update.message.reply_text(
-            ui.format_help_message(),
+            ui.format_help_message_with_debt(),
             parse_mode='Markdown',
             reply_markup=ui.get_main_keyboard()
         )
@@ -346,13 +588,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:  # "other" or unrecognized intent
         await update.message.reply_text(
             "I'm not sure what you want to do. You can log an expense by typing something like 'coffee 3.50', "
+            "track debts with '200 hotdog (john)', "
             "or use one of the options below:",
             reply_markup=ui.get_main_keyboard()
         )
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    Button handler that uses the date field from expenses for filtering.
+    Button handler that handles expense filtering and debt tracking options.
     
     Args:
         update (Update): The update object
@@ -418,26 +661,85 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=ui.get_main_keyboard()
             )
     
-    elif callback_data == "help":
+    elif callback_data == "all_balances":
+        await query.edit_message_text("Fetching balances...")
+        
         try:
-            await query.edit_message_text(
-                ui.format_help_message(),
-                parse_mode='Markdown',
-                reply_markup=ui.get_main_keyboard()
-            )
+            result = debt_service.list_all_balances()
+            
+            if result["success"]:
+                await query.edit_message_text(
+                    ui.format_balance_summary(result["data"]),
+                    parse_mode='Markdown',
+                    reply_markup=ui.get_debt_keyboard()
+                )
+            else:
+                await query.edit_message_text(
+                    f"Error fetching balances: {result['message']}",
+                    reply_markup=ui.get_main_keyboard()
+                )
         except Exception as e:
-            logger.error(f"Error displaying help: {str(e)}")
+            logger.error(f"Error handling balances: {str(e)}")
+            traceback.print_exc()
             await query.edit_message_text(
-                "Error displaying help. Please try again.",
+                f"Error fetching balances: {str(e)}",
                 reply_markup=ui.get_main_keyboard()
             )
     
-    else:
-        # Default fallback
+    elif callback_data == "add_debt":
+        # Start the conversation flow for adding a debt
+        await query.edit_message_text(
+            "Who is the debt with? Please enter the person's name:",
+            reply_markup=None
+        )
+        context.user_data['awaiting_debt_person'] = True
+        return AWAITING_DEBT_PERSON
+    
+    elif callback_data == "settle_debt":
+        # Start the conversation flow for settling a debt
+        await query.edit_message_text(
+            "Who are you settling a debt with? Please enter the person's name:",
+            reply_markup=None
+        )
+        context.user_data['awaiting_settlement_person'] = True
+        return AWAITING_DEBT_PERSON
+    
+    elif callback_data == "main_menu":
+        # Return to main menu
         await query.edit_message_text(
             "Please select an option:",
             reply_markup=ui.get_main_keyboard()
         )
+    
+    elif callback_data.startswith("set_custom_budget_"):
+        # Extract days from callback data
+        try:
+            days = int(callback_data.split("_")[-1])
+            
+            # Store the days and update state
+            context.user_data['custom_budget_days'] = days
+            context.user_data['awaiting_custom_days'] = False
+            context.user_data['awaiting_custom_budget'] = True
+            
+            await query.edit_message_text(
+                f"Please enter the amount for your {days}-day budget:"
+            )
+            
+            return AWAITING_CUSTOM_BUDGET
+        except ValueError:
+            if callback_data == "set_custom_budget_input":
+                await query.edit_message_text(
+                    "Please enter the number of days for your budget period:"
+                )
+                context.user_data['awaiting_custom_days'] = True
+                return AWAITING_CUSTOM_DAYS
+            else:
+                await query.edit_message_text(
+                    "Invalid custom budget option. Please try again.",
+                    reply_markup=ui.get_main_keyboard()
+                )
+    
+    else:
         # Default fallback
         await query.edit_message_text(
             "Please select an option:",
@@ -475,305 +777,6 @@ async def handle_budget_input(update: Update, context: ContextTypes.DEFAULT_TYPE
     
     return ConversationHandler.END
 
-async def handle_custom_days_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Handle custom period days input (simplified version).
-    
-    Args:
-        update (Update): The update object
-        context (ContextTypes.DEFAULT_TYPE): The context object
-    """
-    user_input = update.message.text
-    
-    try:
-        # Try to parse the days as an integer
-        days = int(user_input)
-        
-        if days < 1 or days > 365:
-            await update.message.reply_text(
-                "Please enter a valid number of days between 1 and 365.",
-                reply_markup=ui.get_main_keyboard()
-            )
-            return AWAITING_CUSTOM_DAYS
-        
-        # Store the days and update state
-        context.user_data['custom_budget_days'] = days
-        context.user_data['awaiting_custom_days'] = False
-        context.user_data['awaiting_custom_budget'] = True
-        
-        await update.message.reply_text(
-            f"Please enter the amount for your {days}-day budget:"
-        )
-        
-        return AWAITING_CUSTOM_BUDGET
-        
-    except ValueError:
-        await update.message.reply_text(
-            "Please enter a valid number of days.",
-            reply_markup=ui.get_main_keyboard()
-        )
-        return AWAITING_CUSTOM_DAYS
-
-async def handle_custom_budget_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Handle custom budget amount input (simplified version).
-    
-    Args:
-        update (Update): The update object
-        context (ContextTypes.DEFAULT_TYPE): The context object
-    """
-    user_input = update.message.text
-    days = context.user_data.get('custom_budget_days', 30)  # Default to 30 if not set
-    
-    # Reset the awaiting flag
-    context.user_data['awaiting_custom_budget'] = False
-    
-    try:
-        # Simple parsing - just extract the first number as the amount
-        amount = 0
-        category = "all"
-        
-        parts = user_input.split()
-        for part in parts:
-            try:
-                amount = float(part.replace(',', ''))
-                break  # Take the first valid number as amount
-            except ValueError:
-                continue
-        
-        # Check if a category is mentioned
-        categories = budget_service.sheets.get_categories()
-        for cat in categories:
-            if cat.lower() in user_input.lower():
-                category = cat
-                break
-        
-        # Create a budget data dictionary
-        today = datetime.datetime.now().strftime("%Y-%m-%d")
-        budget_data = {
-            "amount": amount,
-            "period": "custom",
-            "days": days,
-            "category": category,
-            "start_date": today,
-            "active": True
-        }
-        
-        # Set the budget
-        result = budget_service.set_budget(budget_data)
-        
-        if result["success"]:
-            await update.message.reply_text(
-                ui.format_custom_period_confirmation(result["data"]),
-                reply_markup=ui.get_main_keyboard()
-            )
-        else:
-            await update.message.reply_text(
-                f"❌ {result['message']}",
-                reply_markup=ui.get_main_keyboard()
-            )
-    except Exception as e:
-        logger.error(f"Error setting custom budget: {str(e)}")
-        traceback.print_exc()
-        await update.message.reply_text(
-            f"❌ Error setting budget: {str(e)}",
-            reply_markup=ui.get_main_keyboard()
-        )
-    
-    # Clean up user data
-    if 'custom_budget_days' in context.user_data:
-        del context.user_data['custom_budget_days']
-    
-    return ConversationHandler.END
-
-async def utang_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Handle /utang command to show expenses where others owe you.
-    
-    Args:
-        update (Update): The update object
-        context (ContextTypes.DEFAULT_TYPE): The context object
-    """
-    # Get shared expenses where others owe you
-    try:
-        # Tell user we're processing
-        await update.message.reply_text("Fetching people who owe you money...")
-        
-        # Get the balances from sheets service
-        balances = expense_service.sheets.get_balances()
-        
-        if not balances:
-            await update.message.reply_text(
-                "No one owes you money right now! 🎉",
-                reply_markup=ui.get_main_keyboard()
-            )
-            return
-        
-        # Filter to only show people who owe you
-        owed_to_me = {person: data for person, data in balances.items() 
-                      if data['net_amount'] > 0}
-        
-        if not owed_to_me:
-            await update.message.reply_text(
-                "No one owes you money right now! 🎉",
-                reply_markup=ui.get_main_keyboard()
-            )
-            return
-        
-        # Generate the message
-        message = "📊 *People Who Owe You Money*\n\n"
-        
-        total_owed = 0
-        for person, data in owed_to_me.items():
-            net_amount = data['net_amount']
-            total_owed += net_amount
-            
-            message += f"*{person} owes you:* ₱{net_amount:.2f}\n"
-            
-            # Only show individual expenses if there are more than one
-            if data['they_owe_me'] > 0 and len(data['expenses']) > 1:
-                for exp in [e for e in data['expenses'] if e.get('Direction') == 'they_owe_me']:
-                    if exp.get('Status', '').lower() in ['unpaid', 'partial']:
-                        message += f"  • ₱{float(exp.get('Amount', 0)):.2f} for {exp.get('Description', 'expense')}\n"
-            
-            # Show netting info if applicable
-            if data['i_owe_them'] > 0:
-                message += f"  _(You owe them ₱{data['i_owe_them']:.2f}, net: they owe you ₱{net_amount:.2f})_\n"
-            
-            message += "\n"
-        
-        # Add total
-        message += f"*Total owed to you:* ₱{total_owed:.2f}"
-        
-        # Add settlement instructions
-        message += "\n\nTo settle, type: `settle [person] [amount]`"
-        
-        await update.message.reply_text(
-            message,
-            parse_mode='Markdown',
-            reply_markup=ui.get_main_keyboard()
-        )
-        
-    except Exception as e:
-        logger.error(f"Error fetching utang: {str(e)}")
-        traceback.print_exc()
-        await update.message.reply_text(
-            f"Error fetching utang: {str(e)}",
-            reply_markup=ui.get_main_keyboard()
-        )
-
-async def owe_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Handle /owe command to show expenses where you owe others.
-    
-    Args:
-        update (Update): The update object
-        context (ContextTypes.DEFAULT_TYPE): The context object
-    """
-    # Get shared expenses where you owe others
-    try:
-        # Tell user we're processing
-        await update.message.reply_text("Fetching people you owe money to...")
-        
-        # Get the balances from sheets service
-        balances = expense_service.sheets.get_balances()
-        
-        if not balances:
-            await update.message.reply_text(
-                "You don't owe anyone money right now! 🎉",
-                reply_markup=ui.get_main_keyboard()
-            )
-            return
-        
-        # Filter to only show people you owe
-        i_owe = {person: data for person, data in balances.items() 
-                 if data['net_amount'] < 0}
-        
-        if not i_owe:
-            await update.message.reply_text(
-                "You don't owe anyone money right now! 🎉",
-                reply_markup=ui.get_main_keyboard()
-            )
-            return
-        
-        # Generate the message
-        message = "📊 *People You Owe Money To*\n\n"
-        
-        total_owed = 0
-        for person, data in i_owe.items():
-            net_amount = -data['net_amount']  # Convert to positive for display
-            total_owed += net_amount
-            
-            message += f"*You owe {person}:* ₱{net_amount:.2f}\n"
-            
-            # Only show individual expenses if there are more than one
-            if data['i_owe_them'] > 0 and len(data['expenses']) > 1:
-                for exp in [e for e in data['expenses'] if e.get('Direction') == 'i_owe_them']:
-                    if exp.get('Status', '').lower() in ['unpaid', 'partial']:
-                        message += f"  • ₱{float(exp.get('Amount', 0)):.2f} for {exp.get('Description', 'expense')}\n"
-            
-            # Show netting info if applicable
-            if data['they_owe_me'] > 0:
-                message += f"  _(They owe you ₱{data['they_owe_me']:.2f}, net: you owe them ₱{net_amount:.2f})_\n"
-            
-            message += "\n"
-        
-        # Add total
-        message += f"*Total you owe:* ₱{total_owed:.2f}"
-        
-        # Add settlement instructions
-        message += "\n\nTo settle, type: `settle [person] [amount]`"
-        
-        await update.message.reply_text(
-            message,
-            parse_mode='Markdown',
-            reply_markup=ui.get_main_keyboard()
-        )
-        
-    except Exception as e:
-        logger.error(f"Error fetching owe: {str(e)}")
-        traceback.print_exc()
-        await update.message.reply_text(
-            f"Error fetching owe: {str(e)}",
-            reply_markup=ui.get_main_keyboard()
-        )
-
-async def settle_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Handle settle command to mark shared expenses as settled.
-    
-    Args:
-        update (Update): The update object
-        context (ContextTypes.DEFAULT_TYPE): The context object
-    """
-    user_input = update.message.text
-    
-    try:
-        # Tell user we're processing
-        await update.message.reply_text("Processing settlement...")
-        
-        # Process the settlement
-        result = expense_service.settle_debt(user_input)
-        
-        if result["success"]:
-            await update.message.reply_text(
-                f"✅ {result['message']}",
-                parse_mode='Markdown',
-                reply_markup=ui.get_main_keyboard()
-            )
-        else:
-            await update.message.reply_text(
-                f"❌ {result['message']}",
-                reply_markup=ui.get_main_keyboard()
-            )
-    except Exception as e:
-        logger.error(f"Error settling debt: {str(e)}")
-        traceback.print_exc()
-        await update.message.reply_text(
-            f"Error settling debt: {str(e)}",
-            reply_markup=ui.get_main_keyboard()
-        )
-
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Log errors and send a message to the user.
@@ -794,6 +797,228 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.effective_message.reply_text(error_message)
         except Exception as e:
             logger.error(f"Failed to send error message: {e}")
+
+async def handle_debt_person_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Handle person name input for debt tracking.
+    
+    Args:
+        update (Update): The update object
+        context (ContextTypes.DEFAULT_TYPE): The context object
+    """
+    user_input = update.message.text
+    
+    # Store the person name
+    context.user_data['debt_person'] = user_input.strip().lower()
+    
+    # Reset the awaiting flag
+    if 'awaiting_debt_person' in context.user_data:
+        context.user_data['awaiting_debt_person'] = False
+        
+        # Now ask for the amount
+        await update.message.reply_text(
+            f"How much is the debt with {user_input}?"
+        )
+        context.user_data['awaiting_debt_amount'] = True
+        return AWAITING_DEBT_AMOUNT
+    
+    elif 'awaiting_settlement_person' in context.user_data:
+        context.user_data['awaiting_settlement_person'] = False
+        
+        # Check if the person has active debts
+        result = debt_service.get_balance(user_input)
+        
+        if not result["success"] or result["data"]["balance"] == 0:
+            await update.message.reply_text(
+                f"No active debts found with {user_input}.",
+                reply_markup=ui.get_main_keyboard()
+            )
+            return ConversationHandler.END
+        
+        # Store the direction based on the balance
+        balance = result["data"]["balance"]
+        if balance > 0:  # They owe you
+            context.user_data['debt_direction'] = "from"
+        else:  # You owe them
+            context.user_data['debt_direction'] = "to"
+        
+        # Now ask for the settlement amount
+        await update.message.reply_text(
+            f"How much are you settling with {user_input}? " +
+            f"(Current balance: {abs(balance)}, " +
+            f"{'they owe you' if balance > 0 else 'you owe them'})"
+        )
+        context.user_data['awaiting_settlement_amount'] = True
+        return AWAITING_DEBT_AMOUNT
+    
+    return ConversationHandler.END
+
+async def handle_debt_amount_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Handle amount input for debt tracking.
+    
+    Args:
+        update (Update): The update object
+        context (ContextTypes.DEFAULT_TYPE): The context object
+    """
+    user_input = update.message.text
+    
+    try:
+        # Try to parse the amount as a number
+        amount = float(user_input.replace(',', ''))
+        
+        # Store the amount
+        context.user_data['debt_amount'] = amount
+        
+        # Reset the awaiting flags
+        if 'awaiting_debt_amount' in context.user_data:
+            context.user_data['awaiting_debt_amount'] = False
+            
+            # Now ask for the direction
+            await update.message.reply_text(
+                f"Is this debt something where:\n" +
+                f"1. {context.user_data['debt_person']} owes you (they owe you)\n" +
+                f"2. You owe {context.user_data['debt_person']} (you owe them)\n\n" +
+                f"Please enter 1 or 2:"
+            )
+            context.user_data['awaiting_debt_direction'] = True
+            return AWAITING_DEBT_DIRECTION
+        
+        elif 'awaiting_settlement_amount' in context.user_data:
+            context.user_data['awaiting_settlement_amount'] = False
+            
+            # Process the settlement
+            person = context.user_data['debt_person']
+            direction = context.user_data['debt_direction']
+            
+            # Prepare settlement data
+            settlement_data = {
+                "person": person,
+                "amount": amount,
+                "direction": direction,
+                "date": datetime.datetime.now().strftime("%Y-%m-%d")
+            }
+            
+            # Process the settlement
+            result = debt_service.settle_debt(settlement_data)
+            
+            if result["success"]:
+                await update.message.reply_text(
+                    ui.format_settlement_confirmation(result["data"]),
+                    reply_markup=ui.get_debt_keyboard()
+                )
+            else:
+                await update.message.reply_text(
+                    f"❌ {result['message']}",
+                    reply_markup=ui.get_main_keyboard()
+                )
+            
+            # Clean up user data
+            for key in ['debt_person', 'debt_amount', 'debt_direction']:
+                if key in context.user_data:
+                    del context.user_data[key]
+            
+            return ConversationHandler.END
+        
+    except ValueError:
+        await update.message.reply_text(
+            "Please enter a valid number for the amount.",
+            reply_markup=ui.get_main_keyboard()
+        )
+        return AWAITING_DEBT_AMOUNT
+
+async def handle_debt_direction_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Handle direction input for debt tracking.
+    
+    Args:
+        update (Update): The update object
+        context (ContextTypes.DEFAULT_TYPE): The context object
+    """
+    user_input = update.message.text
+    
+    # Parse the direction
+    if user_input.strip() == "1":
+        # They owe you
+        context.user_data['debt_direction'] = "from"
+    elif user_input.strip() == "2":
+        # You owe them
+        context.user_data['debt_direction'] = "to"
+    else:
+        await update.message.reply_text(
+            "Please enter either 1 (they owe you) or 2 (you owe them)."
+        )
+        return AWAITING_DEBT_DIRECTION
+    
+    # Reset the awaiting flag
+    context.user_data['awaiting_debt_direction'] = False
+    
+    # Now ask for the description
+    await update.message.reply_text(
+        "What is this debt for? (Optional, press Skip if none)"
+    )
+    context.user_data['awaiting_debt_description'] = True
+    return AWAITING_DEBT_DESCRIPTION
+
+async def handle_debt_description_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Handle description input for debt tracking.
+    
+    Args:
+        update (Update): The update object
+        context (ContextTypes.DEFAULT_TYPE): The context object
+    """
+    user_input = update.message.text
+    
+    # Store the description
+    if user_input.lower() == "skip":
+        context.user_data['debt_description'] = ""
+    else:
+        context.user_data['debt_description'] = user_input
+    
+    # Reset the awaiting flag
+    context.user_data['awaiting_debt_description'] = False
+    
+    # Now process the debt
+    try:
+        # Prepare debt data
+        debt_data = {
+            "person": context.user_data['debt_person'],
+            "amount": context.user_data['debt_amount'],
+            "direction": context.user_data['debt_direction'],
+            "description": context.user_data['debt_description'],
+            "date": datetime.datetime.now().strftime("%Y-%m-%d")
+        }
+        
+        # Add the debt
+        result = debt_service.add_debt(debt_data)
+        
+        if result["success"]:
+            await update.message.reply_text(
+                ui.format_debt_confirmation(result["data"]),
+                reply_markup=ui.get_debt_keyboard()
+            )
+        else:
+            await update.message.reply_text(
+                f"❌ {result['message']}",
+                reply_markup=ui.get_main_keyboard()
+            )
+        
+        # Clean up user data
+        for key in ['debt_person', 'debt_amount', 'debt_direction', 'debt_description']:
+            if key in context.user_data:
+                del context.user_data[key]
+        
+        return ConversationHandler.END
+        
+    except Exception as e:
+        await update.message.reply_text(
+            f"Error adding debt: {str(e)}",
+            reply_markup=ui.get_main_keyboard()
+        )
+        return ConversationHandler.END
+
+
 def main():
     """Start the bot with proper configuration for Render."""
     # Create the Application (without the non-existent parameter)
@@ -802,16 +1027,7 @@ def main():
     # Add command handlers
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
-
-    # Add shared expense handlers
-    application.add_handler(CommandHandler("utang", utang_command))
-    application.add_handler(CommandHandler("owe", owe_command))
-
-    # Add settlement handler (both command and text pattern)
-    application.add_handler(CommandHandler("settle", settle_command))
-    application.add_handler(MessageHandler(
-        filters.TEXT & filters.Regex(r"(?i)^settle\s+"), settle_command
-    ))
+    application.add_handler(CommandHandler("balance", balance_command))  # New balance command
 
     # Add custom budget handler
     custom_budget_handler = ConversationHandler(
@@ -830,6 +1046,32 @@ def main():
         persistent=False,
     )
     application.add_handler(custom_budget_handler)
+
+    # Add debt tracking conversation handler
+    debt_handler = ConversationHandler(
+        entry_points=[
+            CallbackQueryHandler(button_handler, pattern=r"^add_debt$"),
+            CallbackQueryHandler(button_handler, pattern=r"^settle_debt$")
+        ],
+        states={
+            AWAITING_DEBT_PERSON: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_debt_person_input)
+            ],
+            AWAITING_DEBT_AMOUNT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_debt_amount_input)
+            ],
+            AWAITING_DEBT_DIRECTION: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_debt_direction_input)
+            ],
+            AWAITING_DEBT_DESCRIPTION: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_debt_description_input)
+            ],
+        },
+        fallbacks=[CommandHandler("cancel", start)],
+        name="debt_conversation",
+        persistent=False,
+    )
+    application.add_handler(debt_handler)
 
     # Add callback query handler for buttons
     application.add_handler(CallbackQueryHandler(button_handler))

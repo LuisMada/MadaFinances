@@ -123,17 +123,6 @@ class TelegramUI:
             "• Type expenses like `coffee 3.50`\n"
             "• Multiple expenses: `coffee 3.50, lunch 12`\n\n"
             
-            "*SHARED EXPENSES*\n"
-            "• Track when someone owes you:\n"
-            "  `200 lunch (Jana)` → Jana owes you ₱200\n"
-            "• Track when you owe someone:\n"
-            "  `200 lunch - Jana` → You owe Jana ₱200\n"
-            "• View debts:\n"
-            "  `/utang` → people who owe you\n"
-            "  `/owe` → people you owe\n"
-            "• Settle a debt:\n"
-            "  `settle Jana 40` → mark as paid\n\n"
-            
             "*BUDGETING*\n"
             "• Set budget: `set 300 budget monthly`\n"
             "• Custom period: `set 200 budget for 5 days`\n"
@@ -150,10 +139,6 @@ class TelegramUI:
             "  Housing, Utilities, Healthcare, Shopping, Education, Other"
         )
     
-    """
-    Add this method to your TelegramUI class in telegram_ui.py
-    """
-
     def get_custom_period_keyboard(self):
         """
         Get the custom period selection keyboard.
@@ -178,6 +163,208 @@ class TelegramUI:
         ]
         
         return InlineKeyboardMarkup(keyboard)
+    
+    def get_debt_keyboard(self):
+        """
+        Get a keyboard with debt-related options.
+        
+        Returns:
+            InlineKeyboardMarkup: Debt-specific keyboard
+        """
+        keyboard = [
+            [
+                InlineKeyboardButton("💰 Check All Balances", callback_data="all_balances")
+            ],
+            [
+                InlineKeyboardButton("➕ Add New Debt", callback_data="add_debt"),
+                InlineKeyboardButton("✅ Settle Debt", callback_data="settle_debt")
+            ],
+            [
+                InlineKeyboardButton("◀️ Back to Main Menu", callback_data="main_menu")
+            ]
+        ]
+        
+        return InlineKeyboardMarkup(keyboard)
+    
+    def format_debt_confirmation(self, debt_data):
+        """
+        Format a debt confirmation message.
+        
+        Args:
+            debt_data (dict): Debt data
+            
+        Returns:
+            str: Formatted message
+        """
+        person = debt_data.get("person", "Unknown")
+        amount = debt_data.get("amount", 0)
+        description = debt_data.get("description", "")
+        direction = debt_data.get("direction", "from")
+        
+        if direction == "from":  # They owe you
+            message = f"✅ Recorded: {person} owes you {amount}"
+        else:  # You owe them
+            message = f"✅ Recorded: You owe {person} {amount}"
+            
+        if description:
+            message += f" for {description}"
+            
+        # Add syntax examples for future use
+        message += f"\n\nQuick tips for next time:"
+        if direction == "from":  # They owe you
+            message += f"\n• '{amount} {description} ({person})' means {person} owes you"
+        else:  # You owe them
+            message += f"\n• '{amount} {description} - {person}' means you owe {person}"
+            
+        message += f"\n\nUse /balance to view current balances."
+        
+        return message
+    
+    def format_settlement_confirmation(self, settlement_data):
+        """
+        Format a settlement confirmation message.
+        
+        Args:
+            settlement_data (dict): Settlement data
+            
+        Returns:
+            str: Formatted message
+        """
+        person = settlement_data.get("person", "Unknown")
+        amount = settlement_data.get("amount", 0)
+        is_you_paying = settlement_data.get("is_you_paying", False)
+        
+        message = f"✅ Debt settled with {person} for {amount}\n"
+        
+        # Add expense note if you were the one paying
+        if is_you_paying:
+            message += f"💸 Payment recorded as an expense\n"
+        
+        # This assumes settlement_data contains a 'new_balance' field
+        # that was added by the DebtService
+        if "new_balance" in settlement_data:
+            balance = settlement_data["new_balance"]
+            if balance == 0:
+                message += f"\nYou and {person} are now all square! 🎉"
+            elif balance > 0:
+                message += f"\n{person} still owes you: {balance}"
+            else:
+                message += f"\nYou still owe {person}: {abs(balance)}"
+        else:
+            message += "\nUse /balance to check updated balances"
+        
+        return message
+    
+    def format_balance_summary(self, balances_data):
+        """
+        Format a balance summary message.
+        
+        Args:
+            balances_data (dict): Balance data from DebtService
+            
+        Returns:
+            str: Formatted message
+        """
+        balances = balances_data.get("balances", [])
+        
+        if not balances:
+            return "You have no active debts! 🎉"
+        
+        # Group by direction
+        they_owe_you = []
+        you_owe_them = []
+        
+        for balance in balances:
+            if balance.get("they_owe", False):
+                they_owe_you.append(balance)
+            elif balance.get("you_owe", False):
+                you_owe_them.append(balance)
+        
+        # Sort by amount (highest first)
+        they_owe_you.sort(key=lambda x: x.get("amount", 0), reverse=True)
+        you_owe_them.sort(key=lambda x: x.get("amount", 0), reverse=True)
+        
+        # Build message
+        message = "📊 *Current Balances*\n\n"
+        
+        # Add people who owe you
+        if they_owe_you:
+            message += "*People who owe you:*\n"
+            for balance in they_owe_you:
+                message += f"• {balance.get('person', 'Unknown')}: {balance.get('amount', 0)}\n"
+            message += "\n"
+        
+        # Add people you owe
+        if you_owe_them:
+            message += "*People you owe:*\n"
+            for balance in you_owe_them:
+                message += f"• {balance.get('person', 'Unknown')}: {balance.get('amount', 0)}\n"
+            message += "\n"
+        
+        # Add totals
+        total_owed_to_you = balances_data.get("total_owed_to_you", 0)
+        total_you_owe = balances_data.get("total_you_owe", 0)
+        net_position = balances_data.get("net_position", 0)
+        
+        message += "*Summary:*\n"
+        message += f"Total owed to you: {total_owed_to_you}\n"
+        message += f"Total you owe: {total_you_owe}\n"
+        message += f"Net position: {net_position} {'(positive)' if net_position >= 0 else '(negative)'}"
+        
+        return message
+    
+    def get_main_keyboard_with_debt(self):
+        """
+        Get the main menu keyboard with debt tracking options.
+        
+        Returns:
+            InlineKeyboardMarkup: Main menu keyboard with debt options
+        """
+        keyboard = [
+            [
+                InlineKeyboardButton("📊 Today's Expenses", callback_data="todays_expenses"),
+                InlineKeyboardButton("💰 Balances", callback_data="all_balances")
+            ],
+            [
+                InlineKeyboardButton("➕ New Debt", callback_data="add_debt"),
+                InlineKeyboardButton("❓ Help", callback_data="help")
+            ]
+        ]
+        
+        return InlineKeyboardMarkup(keyboard)
+        
+    def format_help_message_with_debt(self):
+        """Format a help message including debt tracking functionality."""
+        return (
+            "🤖 *Financial Tracker Bot Help*\n\n"
+            "*EXPENSE TRACKING*\n"
+            "• Type expenses like `coffee 3.50`\n"
+            "• Multiple expenses: `coffee 3.50, lunch 12`\n\n"
+            
+            "*BUDGETING*\n"
+            "• Set budget: `set 300 budget monthly`\n"
+            "• Custom period: `set 200 budget for 5 days`\n"
+            "• Check status: `budget status`\n\n"
+            
+            "*DEBT TRACKING*\n"
+            "• Record when someone owes you: `200 hotdog (john)`\n"
+            "• Record when you owe someone: `200 lunch - mary`\n"
+            "• Other ways to record debts:\n"
+            "  - `john owes me 500 for lunch`\n"
+            "  - `i owe sara 350`\n"
+            "• Settle debt: `settle 300 with alex`\n"
+            "• Check balance: `/balance` or `check balance with sara`\n\n"
+            
+            "*SUMMARIES*\n"
+            "• This month: `summary this month`\n"
+            "• Last week: `summary last week`\n"
+            "• Today: `today's expenses`\n\n"
+            
+            "*CATEGORIES*\n"
+            "• Specify with: `coffee 3.50 Food`\n"
+            "• Available: Food, Transportation, Entertainment, \n"
+            "  Housing, Utilities, Healthcare, Shopping, Education, Other"
+        )
 
     def format_custom_period_confirmation(self, budget_data):
         """
@@ -204,5 +391,83 @@ class TelegramUI:
             message += f"\nStarting: {budget_data['start_date']}"
         
         message += "\n\nUse the 'Today's Expenses' button to check your current spending status."
+        
+        return message
+        
+    def format_budget_status(self, data):
+        """
+        Format budget status message.
+        
+        Args:
+            data (dict): Budget status data
+            
+        Returns:
+            str: Formatted message
+        """
+        status = data.get("status", "unknown")
+        percentage_used = data.get("percentage_used", 0)
+        remaining = data.get("remaining", 0)
+        budget_amount = data.get("budget_amount", 0)
+        total_spent = data.get("total_spent", 0)
+        days_remaining = data.get("days_remaining", 0)
+        remaining_daily = data.get("remaining_daily", 0)
+        category = data.get("category", "all")
+        period = data.get("period", "custom")
+        
+        if period == "custom":
+            period_text = f"{data.get('days_total', 30)}-day period"
+        else:
+            period_text = period
+            
+        # Build message based on status
+        if status == "over_budget":
+            emoji = "🔴"
+            status_text = "Over Budget"
+        elif status == "near_limit":
+            emoji = "🟠"
+            status_text = "Near Limit"
+        else:  # under_budget
+            emoji = "🟢"
+            status_text = "Under Budget"
+            
+        message = f"{emoji} *Budget Status: {status_text}*\n\n"
+        
+        # Add category if not 'all'
+        if category.lower() != "all":
+            message += f"Category: {category}\n"
+            
+        message += f"Budget: {budget_amount:.2f} ({period_text})\n"
+        message += f"Spent: {total_spent:.2f} ({percentage_used:.1f}%)\n"
+        message += f"Remaining: {remaining:.2f}\n\n"
+        
+        message += f"Days left: {days_remaining}\n"
+        
+        # Only show daily allowance if there are days remaining
+        if days_remaining > 0:
+            message += f"Daily allowance: {remaining_daily:.2f}\n"
+            
+        return message
+            
+    def format_budget_confirmation(self, budget_data):
+        """
+        Format a regular budget confirmation message.
+        
+        Args:
+            budget_data (dict): Budget data
+            
+        Returns:
+            str: Formatted message
+        """
+        period = budget_data.get("period", "monthly")
+        category = budget_data.get("category", "all")
+        amount = budget_data.get("amount", 0)
+        
+        message = f"✅ Budget Set: {amount} for {period} period"
+        
+        # Add category if it's not 'all'
+        if category.lower() != "all":
+            message += f" ({category} category)"
+            
+        message += "\n\nUse 'budget status' to check your spending against the budget."
         
         return message
