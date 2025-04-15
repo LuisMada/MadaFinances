@@ -328,16 +328,43 @@ class SheetsService:
             dict: Dictionary with balances by person
         """
         try:
-            # Get all unpaid shared expenses
+            # Get all shared expenses
             all_expenses = self.get_shared_expenses(status=None)  # Get all statuses
+            
+            if DEBUG:
+                print(f"Got {len(all_expenses)} expenses for balance calculation")
+                if all_expenses:
+                    print(f"Sample expense for balance: {all_expenses[0]}")
+            
+            # Find the actual column names as they appear in the spreadsheet
+            if all_expenses:
+                sample = all_expenses[0]
+                person_col = next((col for col in sample.keys() if col.lower() == 'person'), 'Person')
+                amount_col = next((col for col in sample.keys() if col.lower() == 'amount'), 'Amount')
+                direction_col = next((col for col in sample.keys() if col.lower() == 'direction'), 'Direction')
+                status_col = next((col for col in sample.keys() if col.lower() == 'status'), 'Status')
+            else:
+                # Default column names if no expenses
+                person_col = 'Person'
+                amount_col = 'Amount'
+                direction_col = 'Direction'
+                status_col = 'Status'
             
             # Group expenses by person
             balances = {}
             for expense in all_expenses:
-                person = expense.get('Person', 'Unknown')
-                amount = float(expense.get('Amount', 0))
-                direction = expense.get('Direction', 'they_owe_me')
-                status = expense.get('Status', 'Unpaid')
+                person = expense.get(person_col, 'Unknown')
+                
+                # Try to convert amount to float, handle errors gracefully
+                try:
+                    amount = float(expense.get(amount_col, 0))
+                except (ValueError, TypeError):
+                    if DEBUG:
+                        print(f"Warning: Invalid amount value: {expense.get(amount_col)}")
+                    amount = 0
+                    
+                direction = expense.get(direction_col, 'they_owe_me')
+                status = expense.get(status_col, 'Unpaid')
                 
                 # Only include unpaid or partial in calculations
                 if status.lower() in ['unpaid', 'partial']:
@@ -359,6 +386,9 @@ class SheetsService:
             # Calculate net amount for each person
             for person in balances:
                 balances[person]['net_amount'] = balances[person]['they_owe_me'] - balances[person]['i_owe_them']
+            
+            if DEBUG:
+                print(f"Calculated balances: {balances}")
             
             return balances
             
