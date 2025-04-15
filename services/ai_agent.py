@@ -192,20 +192,6 @@ class AIAgent:
                 
                 return parsed_data
             
-        except Exception as e:
-            print(f"Error parsing expense: {str(e)}")
-            # Return default structure for error handling
-            return {
-                "date": today,
-                "description": user_input,
-                "amount": 0,
-                "category": "Other",
-                "source": "telegram",
-                "person": None,
-                "direction": None,
-                "error": str(e)
-            }
-                
             except Exception as e:
                 print(f"Error parsing expense: {str(e)}")
                 # Return default structure for error handling
@@ -219,6 +205,20 @@ class AIAgent:
                     "direction": None,
                     "error": str(e)
                 }
+                    
+                except Exception as e:
+                    print(f"Error parsing expense: {str(e)}")
+                    # Return default structure for error handling
+                    return {
+                        "date": today,
+                        "description": user_input,
+                        "amount": 0,
+                        "category": "Other",
+                        "source": "telegram",
+                        "person": None,
+                        "direction": None,
+                        "error": str(e)
+                    }
     
     def generate_summary(self, expenses, period=None, budget_data=None):
         """
