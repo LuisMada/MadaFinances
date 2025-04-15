@@ -136,7 +136,11 @@ class SheetsService:
             headers = all_values[0]
             data = all_values[1:]
             
-            # Convert to list of dictionaries
+            if DEBUG:
+                print(f"Shared expenses headers: {headers}")
+                print(f"First row data: {data[0] if data else 'No data'}")
+            
+            # Convert to list of dictionaries with case-insensitive access
             expenses = []
             for row in data:
                 # Make sure we have complete rows
@@ -144,27 +148,44 @@ class SheetsService:
                     # Add empty values for missing columns
                     row = row + [""] * (len(headers) - len(row))
                     
+                # Create a dictionary with original header names
                 expense = dict(zip(headers, row))
                 expenses.append(expense)
             
-            # Apply filters
+            if DEBUG:
+                print(f"Got {len(expenses)} expenses before filtering")
+                if expenses:
+                    print(f"Sample expense: {expenses[0]}")
+            
+            # Apply filters using case-insensitive matching
             filtered_expenses = expenses
             
             # Filter by direction if provided
             if direction:
+                # Get the direction column name with correct case
+                direction_col = next((h for h in headers if h.lower() == 'direction'), 'Direction')
                 filtered_expenses = [exp for exp in filtered_expenses 
-                                    if exp.get('Direction', '').lower() == direction.lower()]
+                                    if exp.get(direction_col, '').lower() == direction.lower()]
             
             # Filter by person if provided
             if person:
+                # Get the person column name with correct case
+                person_col = next((h for h in headers if h.lower() == 'person'), 'Person')
                 filtered_expenses = [exp for exp in filtered_expenses 
-                                    if exp.get('Person', '').lower() == person.lower()]
+                                    if exp.get(person_col, '').lower() == person.lower()]
             
             # Filter by status if provided
             if status:
+                # Get the status column name with correct case
+                status_col = next((h for h in headers if h.lower() == 'status'), 'Status')
                 filtered_expenses = [exp for exp in filtered_expenses 
-                                    if exp.get('Status', '').lower() == status.lower()]
+                                    if exp.get(status_col, '').lower() == status.lower()]
                 
+            if DEBUG:
+                print(f"Got {len(filtered_expenses)} expenses after filtering")
+                if filtered_expenses:
+                    print(f"First filtered expense: {filtered_expenses[0]}")
+            
             return filtered_expenses
             
         except Exception as e:
