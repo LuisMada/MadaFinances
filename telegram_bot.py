@@ -845,11 +845,19 @@ def main():
      webhook_port = int(os.environ.get("PORT", 8443))
      
      if webhook_url:
+         # Delete any existing webhook and drop pending updates to avoid conflicts
+         print("Setting up webhook and dropping pending updates...")
+         try:
+             application.bot.delete_webhook(drop_pending_updates=True)
+         except Exception as e:
+             print(f"Error deleting webhook: {str(e)}")
+         
          application.run_webhook(
              listen="0.0.0.0",
              port=webhook_port,
              url_path=TELEGRAM_TOKEN,
-             webhook_url=f"{webhook_url}/{TELEGRAM_TOKEN}"
+             webhook_url=f"{webhook_url}/{TELEGRAM_TOKEN}",
+             drop_pending_updates=True
          )
      else:
          # Start a simple HTTP server in a separate thread
@@ -860,8 +868,9 @@ def main():
          server_thread.start()
          print(f"Started HTTP server on port {server_port}")
          
-         # Start the Bot in polling mode
-         application.run_polling()
+         # Start the Bot in polling mode with drop_pending_updates
+         print("Starting polling and dropping pending updates...")
+         application.run_polling(drop_pending_updates=True)
 
 if __name__ == '__main__':
     main()
