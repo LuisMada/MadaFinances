@@ -795,66 +795,42 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.error(f"Failed to send error message: {e}")
 def main():
-    """Start the bot with simplified functionality but with custom budget handler."""
-    # Create the Application
-    application = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-    
-    # Add command handlers
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("help", help_command))
-    
-    # Add custom budget conversation handler
-    custom_budget_handler = ConversationHandler(
-        entry_points=[CommandHandler("cb", custom_budget_command)],
-        states={
-            AWAITING_CUSTOM_DAYS: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_custom_days_input)],
-            AWAITING_CUSTOM_BUDGET: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_custom_budget_input)]
-        },
-        fallbacks=[CommandHandler("cancel", help_command)]
-    )
-    application.add_handler(custom_budget_handler)
-    
-    # Add shared expense handlers
-    application.add_handler(CommandHandler("utang", utang_command))
-    application.add_handler(CommandHandler("owe", owe_command))
-    
-    # Add handler for settle commands (both /settle and text with "settle")
-    application.add_handler(CommandHandler("settle", settle_command))
-    application.add_handler(MessageHandler(
-        filters.TEXT & filters.Regex(r"(?i)^settle\s+"), settle_command
-    ))
-    
-    # Add callback query handler for buttons
-    application.add_handler(CallbackQueryHandler(button_handler))
-    
-    # Add default message handler
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    
-    # Add error handler
-    application.add_error_handler(error_handler)
-    
-    # Set up webhook if in production
-    webhook_url = os.environ.get("WEBHOOK_URL")
-    webhook_port = int(os.environ.get("PORT", 8443))
-    
-    if webhook_url:
-        application.run_webhook(
-            listen="0.0.0.0",
-            port=webhook_port,
-            url_path=TELEGRAM_TOKEN,
-            webhook_url=f"{webhook_url}/{TELEGRAM_TOKEN}"
-        )
-    else:
-        # Start a simple HTTP server in a separate thread
-        server_port = int(os.environ.get("PORT", 8080))
-        server = HTTPServer(('0.0.0.0', server_port), SimpleHTTPRequestHandler)
-        server_thread = threading.Thread(target=server.serve_forever)
-        server_thread.daemon = True
-        server_thread.start()
-        print(f"Started HTTP server on port {server_port}")
-        
-        # Start the Bot in polling mode
-        application.run_polling()
+     """Start the bot with proper configuration for Render."""
+     # Create the Application with a specific update queue size
+     application = ApplicationBuilder().token(TELEGRAM_TOKEN).update_queue_max_size(1).build()
+     # Create the Application (without the queue size parameter)
+     application = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+ 
+     # Add command handlers
+     application.add_handler(CommandHandler("start", start))
+     application.add_handler(CommandHandler("help", help_command))
+     
+     # Add shared expense handlers
+     application.add_handler(CommandHandler("utang", utang_command))
+     application.add_handler(CommandHandler("owe", owe_command))
+     
+     # Add settlement handler (both command and text pattern)
+     application.add_handler(CommandHandler("settle", settle_command))
+     application.add_handler(MessageHandler(
+         filters.TEXT & filters.Regex(r"(?i)^settle\s+"), settle_command
+     ))
+ 
+     # Add custom budget handler
+     custom_budget_handler = ConversationHandler(
+         entry_points=[CommandHandler("cb", custom_budget_command)],
+         states={
+             AWAITING_CUSTOM_DAYS: [
+                 MessageHandler(filters.TEXT & ~filters.COMMAND, handle_custom_days_input),
+                 CallbackQueryHandler(button_handler, pattern=r"^set_custom_budget_\d+$")
+             ],
+             AWAITING_CUSTOM_BUDGET: [
+                 MessageHandler(filters.TEXT & ~filters.COMMAND, handle_custom_budget_input)
+             ],
+         },
+         fallbacks=[CommandHandler("cancel", start)],
+         name="custom_budget_conversation",
+         persistent=False,
+     )
 
 if __name__ == '__main__':
     main()
