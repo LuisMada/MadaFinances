@@ -116,31 +116,39 @@ class TelegramUI:
         return message
     
     def format_help_message(self):
-        """
-        Format the simplified help message.
-        
-        Returns:
-            str: Formatted help message
-        """
-        help_text = (
-            "🤖 **Financial Tracker Bot Help**\n\n"
+        """Format a help message with the bot's capabilities."""
+        return (
+            "🤖 *Financial Tracker Bot Help*\n\n"
+            "*EXPENSE TRACKING*\n"
+            "• Type expenses like `coffee 3.50`\n"
+            "• Multiple expenses: `coffee 3.50, lunch 12`\n\n"
             
-            "📝 **Logging Expenses**\n"
-            "• Type `coffee 3.50` to log an expense\n"
-            "• You can include a category: `lunch 12 food`\n"
-            "• Multiple expenses: `coffee 3.50, taxi 15`\n\n"
+            "*SHARED EXPENSES*\n"
+            "• Track when someone owes you:\n"
+            "  `200 lunch (Jana)` → Jana owes you ₱200\n"
+            "• Track when you owe someone:\n"
+            "  `200 lunch - Jana` → You owe Jana ₱200\n"
+            "• View debts:\n"
+            "  `/utang` → people who owe you\n"
+            "  `/owe` → people you owe\n"
+            "• Settle a debt:\n"
+            "  `settle Jana 40` → mark as paid\n\n"
             
-            "💰 **Budget Management**\n"
-            "• Set a budget: `set 300 budget for 14 days`\n\n"
+            "*BUDGETING*\n"
+            "• Set budget: `set 300 budget monthly`\n"
+            "• Custom period: `set 200 budget for 5 days`\n"
+            "• Check status: `budget status`\n\n"
             
-            "📊 **View Expenses**\n"
-            "• Click 'Today's Expenses' button to see today's spending\n\n"
+            "*SUMMARIES*\n"
+            "• This month: `summary this month`\n"
+            "• Last week: `summary last week`\n"
+            "• Today: `today's expenses`\n\n"
             
-            "🗑️ **Deleting Expenses**\n"
-            "• Type: `delete coffee` to remove coffee expenses\n"
+            "*CATEGORIES*\n"
+            "• Specify with: `coffee 3.50 Food`\n"
+            "• Available: Food, Transportation, Entertainment, \n"
+            "  Housing, Utilities, Healthcare, Shopping, Education, Other"
         )
-        
-        return help_text
     
     """
     Add this method to your TelegramUI class in telegram_ui.py

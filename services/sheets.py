@@ -66,6 +66,286 @@ class SheetsService:
             traceback.print_exc()
             raise Exception(f"Failed to authenticate with Google Sheets: {str(e)}")
     
+    def log_shared_expense(self, expense_data):
+        """
+        Log a shared expense to Google Sheets.
+        
+        Args:
+            expense_data (dict): Dictionary containing expense details
+                Required keys: date, description, amount, category, person, direction
+        
+        Returns:
+            bool: True if successful
+        """
+        try:
+            if DEBUG:
+                print(f"Logging shared expense to Google Sheets: {expense_data}")
+            
+            # Select the "Shared Expenses" worksheet
+            worksheet = self.spreadsheet.worksheet("Shared Expenses")
+            
+            # Prepare the row to append
+            row = [
+                expense_data["date"],
+                expense_data["description"],
+                expense_data["amount"],
+                expense_data["category"],
+                expense_data["person"],
+                expense_data["direction"],
+                "Unpaid",  # Default status
+                ""  # Empty settled date
+            ]
+            
+            # Append the row
+            worksheet.append_row(row)
+            
+            if DEBUG:
+                print("Successfully logged shared expense to Google Sheets")
+            
+            return True
+            
+        except Exception as e:
+            print(f"Error logging shared expense to Google Sheets: {str(e)}")
+            traceback.print_exc()
+            raise Exception(f"Error logging shared expense to Google Sheets: {str(e)}")
+
+    def get_shared_expenses(self, direction=None, person=None, status="Unpaid"):
+        """
+        Retrieve shared expenses, optionally filtered by direction, person name, and status.
+        
+        Args:
+            direction (str, optional): Filter by 'they_owe_me' or 'i_owe_them'
+            person (str, optional): Person name to filter by
+            status (str, optional): Filter by status ('Unpaid', 'Partial', 'Settled')
+        
+        Returns:
+            list: List of shared expense dictionaries
+        """
+        try:
+            # Select the "Shared Expenses" worksheet
+            worksheet = self.spreadsheet.worksheet("Shared Expenses")
+            
+            # Get all values including headers
+            all_values = worksheet.get_all_values()
+            
+            # Check if there's data (should be at least headers)
+            if len(all_values) <= 1:
+                return []
+                
+            # Extract headers and data
+            headers = all_values[0]
+            data = all_values[1:]
+            
+            # Convert to list of dictionaries
+            expenses = []
+            for row in data:
+                # Make sure we have complete rows
+                if len(row) < len(headers):
+                    # Add empty values for missing columns
+                    row = row + [""] * (len(headers) - len(row))
+                    
+                expense = dict(zip(headers, row))
+                expenses.append(expense)
+            
+            # Apply filters
+            filtered_expenses = expenses
+            
+            # Filter by direction if provided
+            if direction:
+                filtered_expenses = [exp for exp in filtered_expenses 
+                                    if exp.get('Direction', '').lower() == direction.lower()]
+            
+            # Filter by person if provided
+            if person:
+                filtered_expenses = [exp for exp in filtered_expenses 
+                                    if exp.get('Person', '').lower() == person.lower()]
+            
+            # Filter by status if provided
+            if status:
+                filtered_expenses = [exp for exp in filtered_expenses 
+                                    if exp.get('Status', '').lower() == status.lower()]
+                
+            return filtered_expenses
+            
+        except Exception as e:
+            print(f"Error retrieving shared expenses: {str(e)}")
+            traceback.print_exc()
+            return []
+
+    def settle_shared_expense(self, person, amount=None):
+        """
+        Settle shared expenses for a specific person.
+        
+        Args:
+            person (str): The person name to settle with
+            amount (float, optional): Amount to settle. If None, settles all debts
+        
+        Returns:
+            dict: Result with details of the settlement
+        """
+        try:
+            # Select the "Shared Expenses" worksheet
+            worksheet = self.spreadsheet.worksheet("Shared Expenses")
+            
+            # Get all values including headers
+            all_values = worksheet.get_all_values()
+            
+            # Check if there's data (should be at least headers)
+            if len(all_values) <= 1:
+                return {"success": False, "message": "No shared expenses found"}
+                
+            # Extract headers and data
+            headers = all_values[0]
+            
+            # Find indexes for key columns
+            date_idx = headers.index("Date") if "Date" in headers else 0
+            person_idx = headers.index("Person") if "Person" in headers else 4
+            amount_idx = headers.index("Amount") if "Amount" in headers else 2
+            status_idx = headers.index("Status") if "Status" in headers else 6
+            direction_idx = headers.index("Direction") if "Direction" in headers else 5
+            settled_date_idx = headers.index("Settled Date") if "Settled Date" in headers else 7
+            
+            # Get expenses for this person with status 'Unpaid'
+            unpaid_expenses = []
+            for i, row in enumerate(all_values[1:], 2):  # Start from 2 to account for header
+                if len(row) <= max(person_idx, status_idx):
+                    continue  # Skip rows that don't have enough columns
+                
+                if (row[person_idx].lower() == person.lower() and 
+                    (row[status_idx].lower() == 'unpaid' or row[status_idx].lower() == 'partial')):
+                    unpaid_expenses.append({
+                        'row_idx': i,
+                        'amount': float(row[amount_idx]) if row[amount_idx] else 0,
+                        'direction': row[direction_idx] if direction_idx < len(row) else 'they_owe_me',
+                        'status': row[status_idx] if status_idx < len(row) else 'Unpaid'
+                    })
+            
+            if not unpaid_expenses:
+                return {"success": False, "message": f"No unpaid expenses found for {person}"}
+            
+            # Calculate total owed in each direction
+            they_owe_me = sum(exp['amount'] for exp in unpaid_expenses 
+                            if exp['direction'].lower() == 'they_owe_me')
+            i_owe_them = sum(exp['amount'] for exp in unpaid_expenses 
+                            if exp['direction'].lower() == 'i_owe_them')
+            
+            # Calculate net amount
+            net_amount = they_owe_me - i_owe_them
+            
+            # If no amount specified, settle all
+            if amount is None:
+                amount = abs(net_amount)
+            
+            # Update expenses based on the settlement direction and amount
+            today = datetime.datetime.now().strftime("%Y-%m-%d")
+            settled_amount = 0
+            
+            if net_amount > 0:  # They owe me
+                # First, apply settlement to 'they_owe_me' expenses
+                remaining = amount
+                for exp in sorted(unpaid_expenses, key=lambda x: x['amount']):
+                    if exp['direction'].lower() == 'they_owe_me' and remaining > 0:
+                        exp_amount = exp['amount']
+                        row_idx = exp['row_idx']
+                        
+                        if remaining >= exp_amount:
+                            # Fully settle this expense
+                            worksheet.update_cell(row_idx, status_idx + 1, "Settled")
+                            worksheet.update_cell(row_idx, settled_date_idx + 1, today)
+                            remaining -= exp_amount
+                            settled_amount += exp_amount
+                        else:
+                            # Partially settle this expense
+                            worksheet.update_cell(row_idx, status_idx + 1, "Partial")
+                            # We don't set settled date for partial settlements
+                            settled_amount += remaining
+                            remaining = 0
+            else:  # I owe them
+                # First, apply settlement to 'i_owe_them' expenses
+                remaining = amount
+                for exp in sorted(unpaid_expenses, key=lambda x: x['amount']):
+                    if exp['direction'].lower() == 'i_owe_them' and remaining > 0:
+                        exp_amount = exp['amount']
+                        row_idx = exp['row_idx']
+                        
+                        if remaining >= exp_amount:
+                            # Fully settle this expense
+                            worksheet.update_cell(row_idx, status_idx + 1, "Settled")
+                            worksheet.update_cell(row_idx, settled_date_idx + 1, today)
+                            remaining -= exp_amount
+                            settled_amount += exp_amount
+                        else:
+                            # Partially settle this expense
+                            worksheet.update_cell(row_idx, status_idx + 1, "Partial")
+                            # We don't set settled date for partial settlements
+                            settled_amount += remaining
+                            remaining = 0
+            
+            # Return settlement details
+            return {
+                "success": True,
+                "message": f"Settled ₱{settled_amount:.2f} with {person}",
+                "data": {
+                    "person": person,
+                    "settled_amount": settled_amount,
+                    "net_amount": net_amount,
+                    "they_owe_me": they_owe_me,
+                    "i_owe_them": i_owe_them
+                }
+            }
+                
+        except Exception as e:
+            print(f"Error settling shared expenses: {str(e)}")
+            traceback.print_exc()
+            return {"success": False, "message": f"Error settling shared expenses: {str(e)}"}
+
+    def get_balances(self):
+        """
+        Calculate the net balance with each person across all shared expenses.
+        
+        Returns:
+            dict: Dictionary with balances by person
+        """
+        try:
+            # Get all unpaid shared expenses
+            all_expenses = self.get_shared_expenses(status=None)  # Get all statuses
+            
+            # Group expenses by person
+            balances = {}
+            for expense in all_expenses:
+                person = expense.get('Person', 'Unknown')
+                amount = float(expense.get('Amount', 0))
+                direction = expense.get('Direction', 'they_owe_me')
+                status = expense.get('Status', 'Unpaid')
+                
+                # Only include unpaid or partial in calculations
+                if status.lower() in ['unpaid', 'partial']:
+                    if person not in balances:
+                        balances[person] = {
+                            'they_owe_me': 0,
+                            'i_owe_them': 0,
+                            'net_amount': 0,
+                            'expenses': []
+                        }
+                    
+                    if direction.lower() == 'they_owe_me':
+                        balances[person]['they_owe_me'] += amount
+                    else:
+                        balances[person]['i_owe_them'] += amount
+                    
+                    balances[person]['expenses'].append(expense)
+            
+            # Calculate net amount for each person
+            for person in balances:
+                balances[person]['net_amount'] = balances[person]['they_owe_me'] - balances[person]['i_owe_them']
+            
+            return balances
+            
+        except Exception as e:
+            print(f"Error calculating balances: {str(e)}")
+            traceback.print_exc()
+            return {}
+
     def _ensure_sheets_exist(self):
         """Create necessary worksheets if they don't exist."""
         try:
@@ -105,12 +385,62 @@ class SheetsService:
                 preferences_sheet.append_row(["UserID", "Setting", "Value"])
                 print(f"Created {PREFERENCES_SHEET} worksheet")
                 
-            # Check and create Paid For sheet
-            if "Paid For" not in worksheet_titles:
-                self.spreadsheet.add_worksheet(title="Paid For", rows=500, cols=10)
-                paid_for_sheet = self.spreadsheet.worksheet("Paid For")
-                paid_for_sheet.append_row(["Date", "Description", "Amount", "Category", "Paid For Person", "Status"])
-                print(f"Created Paid For worksheet")
+            # Check and create Shared Expenses sheet (formerly Paid For)
+            if "Shared Expenses" not in worksheet_titles:
+                if "Paid For" in worksheet_titles:
+                    # Rename existing "Paid For" sheet to "Shared Expenses"
+                    old_sheet = self.spreadsheet.worksheet("Paid For")
+                    old_sheet.update_title("Shared Expenses")
+                    
+                    # Get the current headers
+                    current_headers = old_sheet.row_values(1)
+                    
+                    # Define the new headers
+                    new_headers = ["Date", "Description", "Amount", "Category", "Person", "Direction", "Status", "Settled Date"]
+                    
+                    # Create a mapping from old headers to new
+                    mapping = {
+                        "Paid For Person": "Person",
+                        "Status": "Status"
+                    }
+                    
+                    # Update headers if needed
+                    if current_headers != new_headers:
+                        # Find which columns exist and which need to be added
+                        existing_cols = {}
+                        for i, header in enumerate(current_headers):
+                            if header in mapping:
+                                existing_cols[mapping[header]] = i
+                            elif header in new_headers:
+                                existing_cols[header] = i
+                        
+                        # Update existing headers
+                        for i, header in enumerate(current_headers):
+                            if header in mapping:
+                                old_sheet.update_cell(1, i+1, mapping[header])
+                        
+                        # Add missing headers
+                        for header in new_headers:
+                            if header not in existing_cols and header not in [mapping.get(h) for h in current_headers]:
+                                old_sheet.insert_cols(len(current_headers) + 1)
+                                old_sheet.update_cell(1, len(current_headers) + 1, header)
+                                current_headers.append(header)
+                        
+                        # Update all rows with default values for new columns
+                        all_values = old_sheet.get_all_values()
+                        if len(all_values) > 1:  # If there's data besides headers
+                            for row_idx in range(2, len(all_values) + 1):
+                                # Set Direction to 'they_owe_me' for existing entries
+                                direction_col = new_headers.index("Direction") + 1
+                                old_sheet.update_cell(row_idx, direction_col, "they_owe_me")
+                    
+                    print(f"Renamed 'Paid For' to 'Shared Expenses' and updated columns")
+                else:
+                    # Create new Shared Expenses sheet with all columns
+                    self.spreadsheet.add_worksheet(title="Shared Expenses", rows=500, cols=10)
+                    shared_expenses_sheet = self.spreadsheet.worksheet("Shared Expenses")
+                    shared_expenses_sheet.append_row(["Date", "Description", "Amount", "Category", "Person", "Direction", "Status", "Settled Date"])
+                    print(f"Created Shared Expenses worksheet")
                 
         except Exception as e:
             print(f"Error ensuring sheets exist: {str(e)}")

@@ -588,57 +588,65 @@ async def handle_custom_budget_input(update: Update, context: ContextTypes.DEFAU
 
 async def utang_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    Handle /utang command to show expenses paid for others.
+    Handle /utang command to show expenses where others owe you.
     
     Args:
         update (Update): The update object
         context (ContextTypes.DEFAULT_TYPE): The context object
     """
-    # Get paid for expenses from sheets
+    # Get shared expenses where others owe you
     try:
         # Tell user we're processing
-        await update.message.reply_text("Fetching utang (money owed to you)...")
+        await update.message.reply_text("Fetching people who owe you money...")
         
-        # Get the expenses from sheets service
-        paid_for_expenses = expense_service.sheets.get_paid_for_expenses()
+        # Get the balances from sheets service
+        balances = expense_service.sheets.get_balances()
         
-        if not paid_for_expenses:
+        if not balances:
             await update.message.reply_text(
                 "No one owes you money right now! 🎉",
                 reply_markup=ui.get_main_keyboard()
             )
             return
         
-        # Group expenses by person
-        person_debts = {}
-        for expense in paid_for_expenses:
-            person = expense.get('Paid For Person', 'Unknown')
-            amount = float(expense.get('Amount', 0))
-            
-            if person in person_debts:
-                person_debts[person]['total'] += amount
-                person_debts[person]['expenses'].append(expense)
-            else:
-                person_debts[person] = {
-                    'total': amount,
-                    'expenses': [expense]
-                }
+        # Filter to only show people who owe you
+        owed_to_me = {person: data for person, data in balances.items() 
+                      if data['net_amount'] > 0}
+        
+        if not owed_to_me:
+            await update.message.reply_text(
+                "No one owes you money right now! 🎉",
+                reply_markup=ui.get_main_keyboard()
+            )
+            return
         
         # Generate the message
-        message = "📊 *Money Owed to You*\n\n"
+        message = "📊 *People Who Owe You Money*\n\n"
         
-        for person, data in person_debts.items():
-            message += f"*{person} owes you:* ₱{data['total']:.2f}\n"
+        total_owed = 0
+        for person, data in owed_to_me.items():
+            net_amount = data['net_amount']
+            total_owed += net_amount
             
-            # Add expense details
-            for exp in data['expenses']:
-                message += f"  • ₱{float(exp.get('Amount', 0)):.2f} for {exp.get('Description', 'expense')}\n"
+            message += f"*{person} owes you:* ₱{net_amount:.2f}\n"
+            
+            # Only show individual expenses if there are more than one
+            if data['they_owe_me'] > 0 and len(data['expenses']) > 1:
+                for exp in [e for e in data['expenses'] if e.get('Direction') == 'they_owe_me']:
+                    if exp.get('Status', '').lower() in ['unpaid', 'partial']:
+                        message += f"  • ₱{float(exp.get('Amount', 0)):.2f} for {exp.get('Description', 'expense')}\n"
+            
+            # Show netting info if applicable
+            if data['i_owe_them'] > 0:
+                message += f"  _(You owe them ₱{data['i_owe_them']:.2f}, net: they owe you ₱{net_amount:.2f})_\n"
             
             message += "\n"
         
         # Add total
-        total_owed = sum(data['total'] for data in person_debts.values())
-        message += f"*Total money owed to you:* ₱{total_owed:.2f}"
+        message += f"*Total owed to you:* ₱{total_owed:.2f}"
+        
+        # Add settlement instructions
+        message += "\n\nTo settle, type: `settle [person] [amount]`"
         
         await update.message.reply_text(
             message,
@@ -651,6 +659,118 @@ async def utang_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         traceback.print_exc()
         await update.message.reply_text(
             f"Error fetching utang: {str(e)}",
+            reply_markup=ui.get_main_keyboard()
+        )
+
+async def owe_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Handle /owe command to show expenses where you owe others.
+    
+    Args:
+        update (Update): The update object
+        context (ContextTypes.DEFAULT_TYPE): The context object
+    """
+    # Get shared expenses where you owe others
+    try:
+        # Tell user we're processing
+        await update.message.reply_text("Fetching people you owe money to...")
+        
+        # Get the balances from sheets service
+        balances = expense_service.sheets.get_balances()
+        
+        if not balances:
+            await update.message.reply_text(
+                "You don't owe anyone money right now! 🎉",
+                reply_markup=ui.get_main_keyboard()
+            )
+            return
+        
+        # Filter to only show people you owe
+        i_owe = {person: data for person, data in balances.items() 
+                 if data['net_amount'] < 0}
+        
+        if not i_owe:
+            await update.message.reply_text(
+                "You don't owe anyone money right now! 🎉",
+                reply_markup=ui.get_main_keyboard()
+            )
+            return
+        
+        # Generate the message
+        message = "📊 *People You Owe Money To*\n\n"
+        
+        total_owed = 0
+        for person, data in i_owe.items():
+            net_amount = -data['net_amount']  # Convert to positive for display
+            total_owed += net_amount
+            
+            message += f"*You owe {person}:* ₱{net_amount:.2f}\n"
+            
+            # Only show individual expenses if there are more than one
+            if data['i_owe_them'] > 0 and len(data['expenses']) > 1:
+                for exp in [e for e in data['expenses'] if e.get('Direction') == 'i_owe_them']:
+                    if exp.get('Status', '').lower() in ['unpaid', 'partial']:
+                        message += f"  • ₱{float(exp.get('Amount', 0)):.2f} for {exp.get('Description', 'expense')}\n"
+            
+            # Show netting info if applicable
+            if data['they_owe_me'] > 0:
+                message += f"  _(They owe you ₱{data['they_owe_me']:.2f}, net: you owe them ₱{net_amount:.2f})_\n"
+            
+            message += "\n"
+        
+        # Add total
+        message += f"*Total you owe:* ₱{total_owed:.2f}"
+        
+        # Add settlement instructions
+        message += "\n\nTo settle, type: `settle [person] [amount]`"
+        
+        await update.message.reply_text(
+            message,
+            parse_mode='Markdown',
+            reply_markup=ui.get_main_keyboard()
+        )
+        
+    except Exception as e:
+        logger.error(f"Error fetching owe: {str(e)}")
+        traceback.print_exc()
+        await update.message.reply_text(
+            f"Error fetching owe: {str(e)}",
+            reply_markup=ui.get_main_keyboard()
+        )
+
+async def settle_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Handle settle command to mark shared expenses as settled.
+    
+    Args:
+        update (Update): The update object
+        context (ContextTypes.DEFAULT_TYPE): The context object
+    """
+    user_input = update.message.text
+    
+    try:
+        # Tell user we're processing
+        await update.message.reply_text("Processing settlement...")
+        
+        # Process the settlement
+        result = expense_service.settle_debt(user_input)
+        
+        if result["success"]:
+            await update.message.reply_text(
+                f"✅ {result['message']}",
+                parse_mode='Markdown',
+                reply_markup=ui.get_main_keyboard()
+            )
+        else:
+            await update.message.reply_text(
+                f"❌ {result['message']}",
+                reply_markup=ui.get_main_keyboard()
+            )
+    except Exception as e:
+        logger.error(f"Error settling debt: {str(e)}")
+        traceback.print_exc()
+        await update.message.reply_text(
+            f"Error settling debt: {str(e)}",
             reply_markup=ui.get_main_keyboard()
         )
 
@@ -674,13 +794,44 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.effective_message.reply_text(error_message)
         except Exception as e:
             logger.error(f"Failed to send error message: {e}")
-
 def main():
     """Start the bot with simplified functionality but with custom budget handler."""
     # Create the Application
     application = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     
-    # Add handlers...
+    # Add command handlers
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("help", help_command))
+    
+    # Add custom budget conversation handler
+    custom_budget_handler = ConversationHandler(
+        entry_points=[CommandHandler("cb", custom_budget_command)],
+        states={
+            AWAITING_CUSTOM_DAYS: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_custom_days_input)],
+            AWAITING_CUSTOM_BUDGET: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_custom_budget_input)]
+        },
+        fallbacks=[CommandHandler("cancel", help_command)]
+    )
+    application.add_handler(custom_budget_handler)
+    
+    # Add shared expense handlers
+    application.add_handler(CommandHandler("utang", utang_command))
+    application.add_handler(CommandHandler("owe", owe_command))
+    
+    # Add handler for settle commands (both /settle and text with "settle")
+    application.add_handler(CommandHandler("settle", settle_command))
+    application.add_handler(MessageHandler(
+        filters.TEXT & filters.Regex(r"(?i)^settle\s+"), settle_command
+    ))
+    
+    # Add callback query handler for buttons
+    application.add_handler(CallbackQueryHandler(button_handler))
+    
+    # Add default message handler
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    
+    # Add error handler
+    application.add_error_handler(error_handler)
     
     # Set up webhook if in production
     webhook_url = os.environ.get("WEBHOOK_URL")
