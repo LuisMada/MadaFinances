@@ -118,50 +118,36 @@ class AIAgent:
                 messages=[
                     {
                         "role": "system", 
-                        "content": "You are a financial assistant that extracts expense information from user messages. You can identify multiple expenses in a single message and detect shared expenses in two formats."
+                        "content": "You are a financial assistant that extracts expense information from user messages. You analyze the exact format and semantics to determine shared expense relationships accurately."
                     },
                     {
                         "role": "user", 
-                        "content": f"""Extract expense information from: '{user_input}'
+                        "content": f"""Extract expense information from this message: '{user_input}'
                         
-                        IMPORTANT: Check if the message contains multiple expenses (like "25 food, 50 haircut").
-                        Also check if the expense is a shared expense, which can be in TWO formats:
-                        1. They owe me: indicated by a name in parentheses like "50 lunch (Jane)"
-                        2. I owe them: indicated by a dash followed by a name like "50 lunch - Jane"
+                        IMPORTANT: Pay special attention to shared expense formats:
+                        1. Format "X (Person)" means Person owes the user (direction: "they_owe_me")
+                        2. Format "X - Person" means the user owes Person (direction: "i_owe_them")
+                        
+                        Examples for clarity:
+                        - "50 lunch (Jane)" → Person: Jane, Direction: they_owe_me
+                        - "50 lunch - Jane" → Person: Jane, Direction: i_owe_them
                         
                         If there is only ONE expense, return a JSON object with these fields:
-                        - "date": in YYYY-MM-DD format (default to today: {today} if not specified)
+                        - "date": in YYYY-MM-DD format (default to today: {today})
                         - "description": a clear description of the expense
                         - "amount": the monetary amount as a number (no currency symbols)
                         - "category": the best matching category from this list: {', '.join(categories)}
                         - "multiple": false
                         - "person": if shared expense, the name of the other person, otherwise null
-                        - "direction": if shared expense, either "they_owe_me" (parentheses format) or "i_owe_them" (dash format), otherwise null
+                        - "direction": if shared expense, either "they_owe_me" or "i_owe_them", otherwise null
                         
-                        If there are MULTIPLE expenses (separated by commas, 'and', or similar), return a JSON with:
+                        If there are MULTIPLE expenses, return a JSON with:
                         - "multiple": true
                         - "expenses": an array where each item contains the fields above (without the "multiple" field)
-                        
-                        IMPORTANT GUIDELINES:
-                        1. Look for commas, 'and' keywords, or clear separations that indicate multiple expenses
-                        2. If amount appears to be numeric with a currency symbol, just extract the number
-                        3. Choose the most appropriate category based on the description
-                        4. For ambiguous dates, prefer standard formats and reasonable assumptions
-                        5. If the description has text in parentheses like "(John)", extract "John" as the person field and set direction to "they_owe_me"
-                        6. If the description has a dash followed by a name like "- Mary", extract "Mary" as the person field and set direction to "i_owe_them"
-                        
-                        Examples of single expenses:
-                        - "coffee 5.50" -> {{date: today, description: "Coffee", amount: 5.50, category: "Food", multiple: false, person: null, direction: null}}
-                        - "uber 25.75 (John)" -> {{date: today, description: "Uber ride", amount: 25.75, category: "Transportation", multiple: false, person: "John", direction: "they_owe_me"}}
-                        - "dinner 45 - Sarah" -> {{date: today, description: "Dinner", amount: 45, category: "Food", multiple: false, person: "Sarah", direction: "i_owe_them"}}
-                        
-                        Examples of multiple expenses:
-                        - "25 food, 50 haircut (Mary)" -> {{multiple: true, expenses: [{{date: today, description: "Food", amount: 25, category: "Food", person: null, direction: null}}, {{date: today, description: "Haircut", amount: 50, category: "Other", person: "Mary", direction: "they_owe_me"}}]}}
-                        - "coffee 5.50 (Bob) and lunch 12 - Alice" -> {{multiple: true, expenses: [{{date: today, description: "Coffee", amount: 5.50, category: "Food", person: "Bob", direction: "they_owe_me"}}, {{date: today, description: "Lunch", amount: 12, category: "Food", person: "Alice", direction: "i_owe_them"}}]}}
                         """
                     }
                 ],
-                temperature=0
+                temperature=0  # Low temperature for consistent parsing
             )
             
             # Get the response content
@@ -176,6 +162,9 @@ class AIAgent:
             # Parse JSON
             parsed_data = json.loads(content)
             
+            if DEBUG:
+                print(f"AI parsed result: {parsed_data}")
+            
             # Check if we have multiple expenses
             if parsed_data.get("multiple", False):
                 # Process each expense in the list
@@ -183,13 +172,6 @@ class AIAgent:
                 for exp in parsed_data.get("expenses", []):
                     # Add source to each expense
                     exp["source"] = "telegram"
-                    
-                    # Handle legacy "paid_for" data for backward compatibility
-                    if "paid_for" in exp and not "person" in exp:
-                        exp["person"] = exp["paid_for"]
-                        exp["direction"] = "they_owe_me"
-                        del exp["paid_for"]
-                    
                     expenses.append(exp)
                 
                 if DEBUG:
@@ -204,12 +186,6 @@ class AIAgent:
                 
                 # Add source
                 parsed_data["source"] = "telegram"
-                
-                # Handle legacy "paid_for" data for backward compatibility
-                if "paid_for" in parsed_data and not "person" in parsed_data:
-                    parsed_data["person"] = parsed_data["paid_for"]
-                    parsed_data["direction"] = "they_owe_me"
-                    del parsed_data["paid_for"]
                 
                 if DEBUG:
                     print(f"Parsed single expense: {parsed_data}")
@@ -229,6 +205,20 @@ class AIAgent:
                 "direction": None,
                 "error": str(e)
             }
+                
+            except Exception as e:
+                print(f"Error parsing expense: {str(e)}")
+                # Return default structure for error handling
+                return {
+                    "date": today,
+                    "description": user_input,
+                    "amount": 0,
+                    "category": "Other",
+                    "source": "telegram",
+                    "person": None,
+                    "direction": None,
+                    "error": str(e)
+                }
     
     def generate_summary(self, expenses, period=None, budget_data=None):
         """
