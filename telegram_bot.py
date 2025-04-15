@@ -797,7 +797,9 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
      """Start the bot with proper configuration for Render."""
      # Create the Application (without the non-existent parameter)
-     application = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+    print("Starting bot with delay to avoid conflicts...")
+    time.sleep(5)
+    application = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
  
      # Add command handlers
      application.add_handler(CommandHandler("start", start))
