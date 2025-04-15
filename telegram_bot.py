@@ -796,9 +796,7 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.error(f"Failed to send error message: {e}")
 def main():
      """Start the bot with proper configuration for Render."""
-     # Create the Application with a specific update queue size
-     application = ApplicationBuilder().token(TELEGRAM_TOKEN).update_queue_max_size(1).build()
-     # Create the Application (without the queue size parameter)
+     # Create the Application (without the non-existent parameter)
      application = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
  
      # Add command handlers
@@ -831,6 +829,39 @@ def main():
          name="custom_budget_conversation",
          persistent=False,
      )
+     application.add_handler(custom_budget_handler)
+     
+     # Add callback query handler for buttons
+     application.add_handler(CallbackQueryHandler(button_handler))
+     
+     # Add default message handler
+     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+     
+     # Add error handler
+     application.add_error_handler(error_handler)
+     
+     # Set up webhook if in production
+     webhook_url = os.environ.get("WEBHOOK_URL")
+     webhook_port = int(os.environ.get("PORT", 8443))
+     
+     if webhook_url:
+         application.run_webhook(
+             listen="0.0.0.0",
+             port=webhook_port,
+             url_path=TELEGRAM_TOKEN,
+             webhook_url=f"{webhook_url}/{TELEGRAM_TOKEN}"
+         )
+     else:
+         # Start a simple HTTP server in a separate thread
+         server_port = int(os.environ.get("PORT", 8080))
+         server = HTTPServer(('0.0.0.0', server_port), SimpleHTTPRequestHandler)
+         server_thread = threading.Thread(target=server.serve_forever)
+         server_thread.daemon = True
+         server_thread.start()
+         print(f"Started HTTP server on port {server_port}")
+         
+         # Start the Bot in polling mode
+         application.run_polling()
 
 if __name__ == '__main__':
     main()
