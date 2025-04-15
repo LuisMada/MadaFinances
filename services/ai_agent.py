@@ -192,33 +192,102 @@ class AIAgent:
                 
                 return parsed_data
             
-            except Exception as e:
-                print(f"Error parsing expense: {str(e)}")
-                # Return default structure for error handling
-                return {
-                    "date": today,
-                    "description": user_input,
-                    "amount": 0,
-                    "category": "Other",
-                    "source": "telegram",
-                    "person": None,
-                    "direction": None,
-                    "error": str(e)
-                }
-                    
-                except Exception as e:
-                    print(f"Error parsing expense: {str(e)}")
-                    # Return default structure for error handling
-                    return {
-                        "date": today,
-                        "description": user_input,
-                        "amount": 0,
-                        "category": "Other",
-                        "source": "telegram",
-                        "person": None,
-                        "direction": None,
-                        "error": str(e)
+        except Exception as e:
+            print(f"Error parsing expense: {str(e)}")
+            # Return default structure for error handling
+            return {
+                "date": today,
+                "description": user_input,
+                "amount": 0,
+                "category": "Other",
+                "source": "telegram",
+                "person": None,
+                "direction": None,
+                "error": str(e)
+            }
+    
+    def generate_summary(self, expenses, period=None, budget_data=None):
+        """
+        Generate a natural language summary of expenses.
+        
+        Args:
+            expenses (list): List of expense dictionaries
+            period (str, optional): Time period for the summary
+            budget_data (dict, optional): Budget information to include in the summary
+            
+        Returns:
+            str: Natural language summary of expenses
+        """
+        try:
+            # Calculate some basic statistics
+            total_spent = sum(float(exp.get('Amount', 0)) for exp in expenses)
+            category_totals = {}
+            
+            for expense in expenses:
+                category = expense.get('Category', 'Other')
+                amount = float(expense.get('Amount', 0))
+                
+                if category in category_totals:
+                    category_totals[category] += amount
+                else:
+                    category_totals[category] = amount
+            
+            # Sort categories by amount spent
+            sorted_categories = sorted(
+                category_totals.items(), 
+                key=lambda x: x[1], 
+                reverse=True
+            )
+            
+            # Prepare data for the AI
+            expenses_json = json.dumps(expenses[:10])  # Limit to first 10 for prompt size
+            categories_json = json.dumps(sorted_categories)
+            
+            completion = self.client.chat.completions.create(
+                model=OPENAI_MODEL,
+                messages=[
+                    {
+                        "role": "system", 
+                        "content": "You are a financial assistant that creates concise, insightful summaries of spending patterns."
+                    },
+                    {
+                        "role": "user", 
+                        "content": f"""Create a spending summary for {period if period else 'recent expenses'}.
+                        
+                        Expense data (sample):
+                        {expenses_json}
+                        
+                        Total spent: {total_spent}
+                        
+                        Spending by category:
+                        {categories_json}
+                        
+                        {f'Budget information: {json.dumps(budget_data)}' if budget_data else ''}
+                        
+                        GUIDELINES:
+                        1. Create a concise, conversational summary of spending patterns
+                        2. Highlight top spending categories and any unusual expenses
+                        3. If budget data is available, mention how spending compares to budget
+                        4. Include the total amount spent
+                        5. Keep your response under 250 words
+                        """
                     }
+                ],
+                temperature=0.7  # Slightly higher temperature for more natural language
+            )
+            
+            # Get the response content
+            summary = completion.choices[0].message.content
+            
+            if DEBUG:
+                print(f"Generated summary: {summary}")
+                
+            return summary
+            
+        except Exception as e:
+            print(f"Error generating summary: {str(e)}")
+            # Return a basic summary for error handling
+            return f"Summary for {period if period else 'recent expenses'}: Total spent: {sum(float(exp.get('Amount', 0)) for exp in expenses)}. Error: {str(e)}"
     
     def generate_summary(self, expenses, period=None, budget_data=None):
         """
