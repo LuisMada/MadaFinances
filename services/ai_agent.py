@@ -192,14 +192,24 @@ class AIAgent:
             }
 
     def detect_intent(self, user_input):
-        # Add a new intent pattern for date queries in the prompt
+        """
+        Detect the user's intent from their natural language input.
+        Updated to support debt tracking and date queries functionality.
+        
+        Args:
+            user_input (str): Natural language input from the user
+            
+        Returns:
+            dict: Dictionary containing intent type and relevant data
+        """
         try:
+            # Use chat completions API with improved prompt
             completion = self.client.chat.completions.create(
                 model=OPENAI_MODEL,
                 messages=[
                     {
                         "role": "system", 
-                        "content": "You are a financial assistant that categorizes user messages into clear intents."
+                        "content": "You are a financial assistant that categorizes user messages into clear intents. Your primary purpose is to distinguish between expense entries, debt tracking, and other requests."
                     },
                     {
                         "role": "user", 
@@ -219,15 +229,18 @@ class AIAgent:
                         - "date_query" (user wants to see expenses for a specific date or day)
                         - "other" (anything else)
                         
-                        For "date_query", look for patterns like:
-                        - "expenses for [date]"
-                        - "what did I spend on [date]"
-                        - "show me expenses for [day]" 
-                        - "last Wednesday expenses"
-                        - "this Monday"
+                        IMPORTANT PATTERNS TO IDENTIFY:
                         
-                        For "date_query", include in the data field:
-                        - 'date_reference': The specific date or day mentioned
+                        1. For "debt_add":
+                        - Look for parentheses pattern first: If the message contains anything in parentheses ( ), assume it's a person name and classify as "debt_add"
+                        - Look for dash pattern: If a dash precedes a word, it's a person's name and it means the user owes them
+                        
+                        2. For "date_query" look for:
+                        - Any message starting with "expenses" or "spending" followed by a date reference
+                        - Queries like "expenses yesterday", "expenses april 15", "expenses last monday"
+                        - Questions asking about spending on a specific date
+                        
+                        For "date_query", include 'date_reference' in the data field with the exact date mention (like "yesterday", "april 15", etc.)
                         """
                     }
                 ],

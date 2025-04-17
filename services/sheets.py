@@ -519,43 +519,35 @@ class SheetsService:
             if DEBUG:
                 print(f"Parsed date reference '{date_reference}' to {target_date}")
             
-            # Get all expenses (for debugging purposes)
-            all_expenses = self.get_expenses_in_date_range(
-                start_date=target_date - datetime.timedelta(days=30),
-                end_date=target_date + datetime.timedelta(days=30)
-            )
-            
-            if DEBUG:
-                print(f"Found {len(all_expenses)} expenses in the wider date range")
-                date_counts = {}
-                for exp in all_expenses:
-                    exp_date = exp.get('Date', 'Unknown')
-                    if exp_date in date_counts:
-                        date_counts[exp_date] += 1
-                    else:
-                        date_counts[exp_date] = 1
-                print(f"Expense dates in range: {date_counts}")
-            
-            # Get expenses for just this specific date - directly match the date string
+            # Format the target date as a string for exact matching
             target_date_str = target_date.strftime("%Y-%m-%d")
             
             if DEBUG:
                 print(f"Looking for expenses with date string: {target_date_str}")
             
-            # Filter expenses directly by the date string
-            filtered_expenses = []
-            for expense in all_expenses:
-                expense_date = expense.get('Date', '')
-                if expense_date == target_date_str:
-                    filtered_expenses.append(expense)
-                    
-            if DEBUG:
-                print(f"Found {len(filtered_expenses)} expenses for {target_date_str}")
-                
-            return filtered_expenses
+            # Get expenses for just this specific date
+            expenses = self.get_expenses_in_date_range(
+                start_date=target_date,
+                end_date=target_date
+            )
+            
+            # Additional logging to troubleshoot matching issues
+            if DEBUG and not expenses:
+                # Get a wider range to see if data exists nearby
+                all_expenses = self.get_expenses_in_date_range(
+                    start_date=target_date - datetime.timedelta(days=3),
+                    end_date=target_date + datetime.timedelta(days=3)
+                )
+                print(f"No expenses found for {target_date_str}, but found {len(all_expenses)} expenses in nearby dates")
+                if all_expenses:
+                    date_samples = set(exp.get('Date', '') for exp in all_expenses)
+                    print(f"Nearby dates in data: {date_samples}")
+            
+            return expenses
                 
         except Exception as e:
             print(f"Error getting expenses for date reference: {str(e)}")
+            import traceback
             traceback.print_exc()
             return []
             
@@ -605,6 +597,7 @@ class SheetsService:
             for month_name, month_num in months.items():
                 if month_name in date_reference:
                     # Try to extract the day
+                    import re
                     day_match = re.search(r'(\d{1,2})', date_reference)
                     if day_match:
                         day = int(day_match.group(1))
@@ -653,6 +646,7 @@ class SheetsService:
             
             # Try to parse just a day number (assume current month)
             try:
+                import re
                 day_only_match = re.match(r'^(\d{1,2})$', date_reference)
                 if day_only_match:
                     day = int(day_only_match.group(1))
@@ -668,6 +662,7 @@ class SheetsService:
             
         except Exception as e:
             print(f"Error parsing date reference: {str(e)}")
+            import traceback
             traceback.print_exc()
             return None
 
