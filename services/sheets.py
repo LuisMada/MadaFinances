@@ -496,6 +496,105 @@ class SheetsService:
             traceback.print_exc()
             return {} if person else []
     
+    def get_expenses_for_date_reference(self, date_reference):
+        """
+        Get expenses for a specific date reference (e.g., "last Wednesday", "2023-04-17").
+        
+        Args:
+            date_reference (str): Date reference as a string
+            
+        Returns:
+            list: List of expenses for the specified date
+        """
+        try:
+            # Convert the natural language date reference to an actual date
+            target_date = self._parse_date_reference(date_reference)
+            
+            if not target_date:
+                return []
+                
+            # Get expenses for just this specific date
+            return self.get_expenses_in_date_range(
+                start_date=target_date,
+                end_date=target_date
+            )
+                
+        except Exception as e:
+            print(f"Error getting expenses for date reference: {str(e)}")
+            traceback.print_exc()
+            return []
+            
+    def _parse_date_reference(self, date_reference):
+        """
+        Parse a date reference like "yesterday", "last Wednesday", or a date string.
+        
+        Args:
+            date_reference (str): Date reference as a string
+            
+        Returns:
+            datetime.date: Parsed date or None if parsing fails
+        """
+        today = datetime.datetime.now().date()
+        date_reference = date_reference.lower().strip()
+        
+        try:
+            # Check for standard date format
+            try:
+                return datetime.datetime.strptime(date_reference, "%Y-%m-%d").date()
+            except ValueError:
+                pass
+                
+            # Check for other common date formats
+            try:
+                return datetime.datetime.strptime(date_reference, "%m/%d/%Y").date() 
+            except ValueError:
+                pass
+                
+            try:
+                return datetime.datetime.strptime(date_reference, "%d/%m/%Y").date()
+            except ValueError:
+                pass
+            
+            # Handle relative day references
+            if "yesterday" in date_reference:
+                return today - datetime.timedelta(days=1)
+            elif "today" in date_reference:
+                return today
+                
+            # Handle day of week references
+            days = {"monday": 0, "tuesday": 1, "wednesday": 2, "thursday": 3, 
+                    "friday": 4, "saturday": 5, "sunday": 6}
+                    
+            for day, day_num in days.items():
+                if day in date_reference:
+                    # Calculate days to go back to reach the specified day
+                    current_day_num = today.weekday()
+                    
+                    if "last" in date_reference:
+                        # Go back to previous week
+                        days_back = 7 + current_day_num - day_num
+                        if days_back >= 7:
+                            days_back -= 7
+                    elif "this" in date_reference:
+                        # Go to this week's day
+                        if day_num >= current_day_num:  # Today or in the future
+                            days_back = current_day_num - day_num
+                        else:  # Already passed this week
+                            days_back = current_day_num - day_num
+                    else:
+                        # Default to most recent past occurrence
+                        days_back = (current_day_num - day_num) % 7
+                        if days_back == 0 and day_num != current_day_num:
+                            days_back = 7
+                    
+                    return today - datetime.timedelta(days=days_back)
+                    
+            return None
+            
+        except Exception as e:
+            print(f"Error parsing date reference: {str(e)}")
+            return None
+
     def settle_debt(self, debt_id, amount=None, settled_date=None):
         """
         Settle a debt completely or partially by its ID.

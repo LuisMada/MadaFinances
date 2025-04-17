@@ -192,24 +192,14 @@ class AIAgent:
             }
 
     def detect_intent(self, user_input):
-        """
-        Detect the user's intent from their natural language input.
-        Updated to support debt tracking functionality with parentheses syntax.
-        
-        Args:
-            user_input (str): Natural language input from the user
-            
-        Returns:
-            dict: Dictionary containing intent type and relevant data
-        """
+        # Add a new intent pattern for date queries in the prompt
         try:
-            # Use chat completions API with improved prompt
             completion = self.client.chat.completions.create(
                 model=OPENAI_MODEL,
                 messages=[
                     {
                         "role": "system", 
-                        "content": "You are a financial assistant that categorizes user messages into clear intents. Your primary purpose is to distinguish between expense entries, debt tracking, and other requests."
+                        "content": "You are a financial assistant that categorizes user messages into clear intents."
                     },
                     {
                         "role": "user", 
@@ -226,31 +216,18 @@ class AIAgent:
                         - "debt_add" (user is recording money owed to/from someone)
                         - "debt_settle" (user is settling a debt with someone)
                         - "debt_balance" (user wants to check debt balance with someone)
+                        - "date_query" (user wants to see expenses for a specific date or day)
                         - "other" (anything else)
                         
-                        IMPORTANT GUIDELINES:
-                        1. MOST IMPORTANT: Look for parentheses pattern first! If the message contains anything in parentheses ( ), assume it's a person name and classify as "debt_add"
-                           Examples: 
-                           - "200 hotdog (john)" → debt_add
-                           - "500 dinner (jana)" → debt_add
-                           - "10 coffee (alice)" → debt_add
-                           - ANY amount followed by text and then (any_name) → debt_add
+                        For "date_query", look for patterns like:
+                        - "expenses for [date]"
+                        - "what did I spend on [date]"
+                        - "show me expenses for [day]" 
+                        - "last Wednesday expenses"
+                        - "this Monday"
                         
-                        2. If the message has a dash before a word, it's likely a person name, classify as "debt_add"
-                           Examples:
-                           - "200 lunch - mary" → debt_add
-                           - "50 tickets - bob" → debt_add
-                        
-                        3. If parentheses or dash patterns are not found:
-                           - If the message contains a product/service name and an amount without any person mentioned, classify as "expense"
-                           - If the message mentions money owed by or to a specific person, classify as "debt_add"
-                           - If the message mentions settling, paying, or clearing a debt with someone, classify as "debt_settle"
-                           - If the message asks about balance, what someone owes, or what is owed to someone, classify as "debt_balance"
-                        
-                        4. For debt intents, include relevant information in the data field:
-                           - For "debt_add", include 'person', 'amount', and 'direction' ('to' or 'from') if detectable
-                           - For "debt_settle", include 'person' and 'amount' if mentioned
-                           - For "debt_balance", include 'person' if a specific person is mentioned
+                        For "date_query", include in the data field:
+                        - 'date_reference': The specific date or day mentioned
                         """
                     }
                 ],

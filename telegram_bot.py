@@ -469,6 +469,45 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=ui.get_main_keyboard()
             )
     
+    # Add this case to the intent handling section of handle_message
+    elif intent_data["intent"] == "date_query":
+        # Extract the date reference
+        date_reference = intent_data.get("data", {}).get("date_reference", "")
+        
+        if not date_reference:
+            await update.message.reply_text(
+                "I couldn't understand which date you're asking about. Please try again with a specific date.",
+                reply_markup=ui.get_main_keyboard()
+            )
+            return
+        
+        # Get expenses for the specified date
+        expenses = expense_service.sheets.get_expenses_for_date_reference(date_reference)
+        
+        if not expenses:
+            await update.message.reply_text(
+                f"No expenses found for {date_reference}.",
+                reply_markup=ui.get_main_keyboard()
+            )
+        else:
+            # Calculate total
+            total = sum(float(exp.get('Amount', 0)) for exp in expenses)
+            
+            # Format message with list of expenses
+            message = f"📅 Expenses for {date_reference}:\n\n"
+            
+            for i, expense in enumerate(expenses, 1):
+                description = expense.get('Description', 'Unknown')
+                amount = expense.get('Amount', '0')
+                category = expense.get('Category', 'Other')
+                message += f"{i}. {description} - {amount} ({category})\n"
+            
+            message += f"\nTotal: {total:.2f}"
+            
+            await update.message.reply_text(
+                message,
+                reply_markup=ui.get_main_keyboard()
+            )
     elif intent_data["intent"] == "summary":
         await update.message.reply_text("Generating summary, please wait...")
         
