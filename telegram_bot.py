@@ -254,6 +254,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         update (Update): The update object
         context (ContextTypes.DEFAULT_TYPE): The context object
     """
+    # Refresh current date at the start of every message processing
+    current_date = datetime.datetime.now().strftime("%Y-%m-%d")
+    if DEBUG:
+        logger.info(f"Current date: {current_date}")
+    
     user_input = update.message.text
     
     if DEBUG:
@@ -426,8 +431,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Process based on intent
     if intent_data["intent"] == "expense":
-        # Process as a personal expense
-        result = expense_service.process_expense(user_input)
+        # Process as a personal expense with fresh date
+        result = expense_service.process_expense(user_input, current_date)
+
         
         if result["success"]:
             # Check if we processed multiple expenses

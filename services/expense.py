@@ -12,7 +12,7 @@ class ExpenseService:
         self.ai = AIAgent()
         self.sheets = SheetsService()
     
-    def process_expense(self, user_input):
+    def process_expense(self, user_input, current_date=None):
         """
         Process a user's expense entry.
         Supports processing multiple expenses from a single message.
@@ -28,7 +28,7 @@ class ExpenseService:
             categories = self.sheets.get_categories()
             
             # Parse the expense(s) using AI
-            parsed_result = self.ai.parse_expense(user_input, categories)
+            parsed_result = self.ai.parse_expense(user_input, categories, current_date)
             
             # Check if we have multiple expenses or a single one
             if isinstance(parsed_result, list):

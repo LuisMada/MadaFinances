@@ -279,7 +279,7 @@ class AIAgent:
             # Return a default intent for error handling
             return {"intent": "error", "data": {"message": str(e)}}
     
-    def parse_expense(self, user_input, categories):
+    def parse_expense(self, user_input, categories, current_date=None):
         """
         Extract structured expense data from user input.
         Supports parsing multiple expenses from a single message.
@@ -287,11 +287,13 @@ class AIAgent:
         Args:
             user_input (str): Natural language input from the user
             categories (list): List of available expense categories
+            current_date (str, optional): Current date in YYYY-MM-DD format
             
         Returns:
             list: List of structured expense data dictionaries, or single dict if only one expense
         """
-        today = datetime.datetime.now().strftime("%Y-%m-%d")
+        # Use provided date or get current date
+        today = current_date if current_date else datetime.datetime.now().strftime("%Y-%m-%d")
         
         try:
             completion = self.client.chat.completions.create(
