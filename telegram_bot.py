@@ -481,14 +481,25 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
         
+        await update.message.reply_text(f"Looking up expenses for {date_reference}...")
+        
         # Get expenses for the specified date
         expenses = expense_service.sheets.get_expenses_for_date_reference(date_reference)
         
         if not expenses:
-            await update.message.reply_text(
-                f"No expenses found for {date_reference}.",
-                reply_markup=ui.get_main_keyboard()
-            )
+            # Add more helpful message
+            target_date = expense_service.sheets._parse_date_reference(date_reference)
+            if target_date:
+                target_date_str = target_date.strftime("%Y-%m-%d")
+                await update.message.reply_text(
+                    f"No expenses found for {date_reference} (date: {target_date_str}).",
+                    reply_markup=ui.get_main_keyboard()
+                )
+            else:
+                await update.message.reply_text(
+                    f"No expenses found for {date_reference}. I couldn't interpret this as a valid date.",
+                    reply_markup=ui.get_main_keyboard()
+                )
         else:
             # Calculate total
             total = sum(float(exp.get('Amount', 0)) for exp in expenses)
