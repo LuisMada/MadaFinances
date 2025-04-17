@@ -6,6 +6,7 @@ Provides CRUD operations for the Google Sheets backend.
 import gspread
 from google.oauth2.service_account import Credentials
 import os
+import re
 import datetime
 import traceback
 from config import (
